@@ -23,6 +23,7 @@ def create_xlsx():
         return {"error": "CSV 원본 파일이 존재하지 않습니다."}, 404
 
     df = pd.read_csv(csv_path)
+    df.columns = df.columns.str.strip()  # ✅ 컬럼명 앞뒤 공백 제거
 
     # 필요 없는 열 제거
     drop_cols = TEMPLATES[template_name].get("drop_columns", [])
