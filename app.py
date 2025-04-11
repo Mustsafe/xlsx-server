@@ -4,8 +4,9 @@ import os
 
 app = Flask(__name__)
 
+# 템플릿 정의: 공백 없는 파일명을 키로 사용
 TEMPLATES = {
-    "고소작업대 작업계획서": {
+    "고소작업대작업계획서": {
         "columns": ["작업 항목", "작성 양식", "실무 예시"],
         "drop_columns": []
     },
@@ -13,12 +14,12 @@ TEMPLATES = {
         "columns": ["작업 항목", "작성 양식", "실무 예시"],
         "drop_columns": []
     },
-    # 여기에 추가 등록 가능
+    # 이후 추가 등록 가능
 }
 
-# 각 템플릿별 출처 문구
+# 출처 문구 정의 (공백 없는 파일명을 키로 사용)
 SOURCES = {
-    "고소작업대 작업계획서": "※ 본 양식은 산업안전보건기준에 관한 규칙 제34조를 기반으로 작성되었습니다.",
+    "고소작업대작업계획서": "※ 본 양식은 산업안전보건기준에 관한 규칙 제34조를 기반으로 작성되었습니다.",
     "밀폐공간작업계획서": "※ 본 양식은 산업안전보건기준에 관한 규칙 제619~626조 및 밀폐공간 질식재해 예방 가이드를 기반으로 작성되었습니다."
 }
 
@@ -38,20 +39,19 @@ def create_xlsx():
     drop_cols = TEMPLATES[template_name].get("drop_columns", [])
     df = df.drop(columns=[col for col in drop_cols if col in df.columns], errors="ignore")
 
-    # 지정된 컬럼 순서로 정렬
+    # 컬럼 순서 정렬
     final_cols = TEMPLATES[template_name]["columns"]
     df = df[[col for col in final_cols if col in df.columns]]
 
-    # 출처 문구 삽입 (마지막 행)
+    # 출처 삽입
     if template_name in SOURCES:
         source_text = SOURCES[template_name]
         df.loc[len(df)] = [source_text] + [""] * (len(df.columns) - 1)
 
-    # 엑셀 파일로 저장
+    # 파일 저장 및 전송
     xlsx_path = f"/mnt/data/{template_name}_최종양식.xlsx"
     df.to_excel(xlsx_path, index=False)
 
-    # 사용자 친화적 파일명 지정
     return send_file(
         xlsx_path,
         as_attachment=True,
