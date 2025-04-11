@@ -35,3 +35,6 @@ def create_xlsx():
     xlsx_path = f"/mnt/data/{template_name}_최종양식.xlsx"
     df.to_excel(xlsx_path, index=False)
     return send_file(xlsx_path, as_attachment=True)
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
