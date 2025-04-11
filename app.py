@@ -4,25 +4,34 @@ import os
 
 app = Flask(__name__)
 
-@app.route('/convert', methods=['POST'])
-def convert_csv_to_xlsx():
-    if 'file' not in request.files:
-        return "파일이 필요합니다", 400
+TEMPLATES = {
+    "고소작업대 작업계획서": {
+        "columns": ["작업명", "작업일시", "작업장소", "고소작업대 종류", "작업인원", "착용 보호구", "위험요인", "안전조치사항", "담당자 서명"],
+        "drop_columns": ["분류", "키워드", "비고"]
+    },
+    # 이후 추가 등록 가능
+}
 
-    file = request.files['file']
-    filename = file.filename
-    if not filename.endswith('.csv'):
-        return "CSV 파일만 허용됩니다", 400
+@app.route("/create_xlsx", methods=["GET"])
+def create_xlsx():
+    template_name = request.args.get("template")
+    if not template_name or template_name not in TEMPLATES:
+        return {"error": "올바른 template 파라미터가 필요합니다."}, 400
 
-    df = pd.read_csv(file)
-    xlsx_path = f"/tmp/{os.path.splitext(filename)[0]}.xlsx"
+    csv_path = f"/mnt/data/{template_name}.csv"
+    if not os.path.exists(csv_path):
+        return {"error": "CSV 원본 파일이 존재하지 않습니다."}, 404
+
+    df = pd.read_csv(csv_path)
+
+    # 필요 없는 열 제거
+    drop_cols = TEMPLATES[template_name].get("drop_columns", [])
+    df = df.drop(columns=[col for col in drop_cols if col in df.columns], errors="ignore")
+
+    # 지정된 컬럼 순서로 정렬
+    final_cols = TEMPLATES[template_name]["columns"]
+    df = df[[col for col in final_cols if col in df.columns]]
+
+    xlsx_path = f"/mnt/data/{template_name}_최종양식.xlsx"
     df.to_excel(xlsx_path, index=False)
-
     return send_file(xlsx_path, as_attachment=True)
-
-@app.route('/')
-def home():
-    return "CSV → XLSX 변환 서버 정상 작동 중입니다."
-
-if __name__ == '__main__':
-    app.run(debug=True)
