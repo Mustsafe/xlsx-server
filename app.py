@@ -4,7 +4,27 @@ import os
 
 app = Flask(__name__)
 
-# 템플릿 정의 (공백 없는 파일명 기준)
+# ✅ 사용자 입력 → 내부 표준 키워드 자동 전환 맵
+KEYWORD_ALIAS = {
+    "고소작업 계획서": "고소작업대작업계획서",
+    "고소 작업 계획서": "고소작업대작업계획서",
+    "고소작업대 계획서": "고소작업대작업계획서",
+    "밀폐공간 계획서": "밀폐공간작업계획서",
+    "정전 작업 허가서": "정전작업허가서",
+    "화기작업 계획서": "화기작업허가서",
+    "전기 계획서": "전기작업계획서",
+    "전기 허가서": "전기작업허가서",
+    "용접작업 계획서": "용접용단작업허가서",
+    "해체 작업계획": "해체작업계획서",
+    "크레인 계획서": "크레인작업계획서",
+    "비계 작업계획서": "비계작업계획서",
+    "협착 작업계획서": "협착위험작업계획서",
+    "양중 작업계획서": "양중작업계획서",
+    "고압가스 계획서": "고압가스작업계획서",
+    # 여기에 계속 확장 가능
+}
+
+# ✅ 표준 템플릿 정의
 TEMPLATES = {
     "고소작업대작업계획서": {"columns": ["작업 항목", "작성 양식", "실무 예시"], "drop_columns": []},
     "밀폐공간작업계획서": {"columns": ["작업 항목", "작성 양식", "실무 예시"], "drop_columns": []},
@@ -23,7 +43,7 @@ TEMPLATES = {
     "고압가스작업계획서": {"columns": ["작업 항목", "작성 양식", "실무 예시"], "drop_columns": []},
 }
 
-# 출처 정의
+# ✅ 출처 정의
 SOURCES = {
     "고소작업대작업계획서": "※ 본 양식은 산업안전보건기준에 관한 규칙 제34조를 기반으로 작성되었습니다.",
     "밀폐공간작업계획서": "※ 본 양식은 산업안전보건기준에 관한 규칙 제619~626조 및 밀폐공간 질식재해 예방 가이드를 기반으로 작성되었습니다.",
@@ -42,11 +62,20 @@ SOURCES = {
     "고압가스작업계획서": "※ 본 양식은 고압가스 안전관리법 시행규칙을 기반으로 작성되었습니다.",
 }
 
+# ✅ 사용자 입력 → 표준 키워드 전환 함수
+def resolve_keyword(raw_keyword: str) -> str:
+    for alias, standard in KEYWORD_ALIAS.items():
+        if alias in raw_keyword:
+            return standard
+    return raw_keyword  # 그대로 반환
+
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
-    template_name = request.args.get("template")
+    raw_template = request.args.get("template", "")
+    template_name = resolve_keyword(raw_template)
+
     if not template_name or template_name not in TEMPLATES:
-        return {"error": "올바른 template 파라미터가 필요합니다."}, 400
+        return {"error": f"'{raw_template}'(으)로는 양식을 찾을 수 없습니다."}, 400
 
     csv_path = f"/mnt/data/{template_name}.csv"
     if not os.path.exists(csv_path):
@@ -54,20 +83,16 @@ def create_xlsx():
 
     df = pd.read_csv(csv_path)
 
-    # 불필요한 열 제거
     drop_cols = TEMPLATES[template_name].get("drop_columns", [])
     df = df.drop(columns=[col for col in drop_cols if col in df.columns], errors="ignore")
 
-    # 컬럼 순서 정렬
     final_cols = TEMPLATES[template_name]["columns"]
     df = df[[col for col in final_cols if col in df.columns]]
 
-    # 출처 삽입
     if template_name in SOURCES:
         source_text = SOURCES[template_name]
         df.loc[len(df)] = [source_text] + [""] * (len(df.columns) - 1)
 
-    # 엑셀 저장
     xlsx_path = f"/mnt/data/{template_name}_최종양식.xlsx"
     df.to_excel(xlsx_path, index=False)
 
