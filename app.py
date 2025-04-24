@@ -1,4 +1,4 @@
-from flask import Flask, request, send_file
+from flask import Flask, request, send_file, jsonify
 import pandas as pd
 import os
 
@@ -8,40 +8,25 @@ app = Flask(__name__)
 KEYWORD_ALIAS = {
     "고소작업 계획서": "고소작업대작업계획서", "고소 작업 계획서": "고소작업대작업계획서",
     "고소작업대 계획서": "고소작업대작업계획서", "고소작업": "고소작업대작업계획서",
-
     "밀폐공간 계획서": "밀폐공간작업계획서", "밀폐공간 작업 계획서": "밀폐공간작업계획서",
     "밀폐공간작업 계획서": "밀폐공간작업계획서", "밀폐공간": "밀폐공간작업계획서",
-
     "정전 작업 허가서": "정전작업허가서", "정전작업": "정전작업허가서",
-
     "해체 작업계획서": "해체작업계획서", "해체 계획서": "해체작업계획서",
     "구조물 해체 계획": "해체작업계획서", "해체작업": "해체작업계획서",
-
     "크레인 계획서": "크레인작업계획서", "크레인 작업 계획서": "크레인작업계획서",
     "양중기 작업계획서": "크레인작업계획서",
-
     "고온 작업 허가서": "고온작업허가서", "고온작업": "고온작업허가서",
-
     "화기작업 허가서": "화기작업허가서", "화기 작업계획서": "화기작업허가서", "화기작업": "화기작업허가서",
-
     "전기 작업계획서": "전기작업계획서", "전기 계획서": "전기작업계획서", "전기작업": "전기작업계획서",
-
     "굴착기 작업계획서": "굴착기작업계획서", "굴착기 계획서": "굴착기작업계획서", "굴삭기 작업계획서": "굴착기작업계획서",
-
     "용접작업 계획서": "용접용단작업허가서", "용접용단 계획서": "용접용단작업허가서", "용접작업": "용접용단작업허가서",
-
     "전기 작업 허가서": "전기작업허가서", "고압 전기작업 계획서": "전기작업허가서", "전기 허가서": "전기작업허가서",
-
     "비계 작업 계획서": "비계작업계획서", "비계 계획서": "비계작업계획서", "비계작업계획": "비계작업계획서",
-
     "협착 작업 계획서": "협착위험작업계획서", "협착 계획서": "협착위험작업계획서",
-
     "양중 작업 계획서": "양중작업계획서", "양중기 작업계획서": "양중작업계획서",
-
     "고압가스 작업 계획서": "고압가스작업계획서", "고압가스 계획서": "고압가스작업계획서"
 }
 
-# ✅ 템플릿 정의
 TEMPLATES = {
     "고소작업대작업계획서": {"columns": ["작업 항목", "작성 양식", "실무 예시"], "drop_columns": []},
     "밀폐공간작업계획서": {"columns": ["작업 항목", "작성 양식", "실무 예시"], "drop_columns": []},
@@ -60,7 +45,6 @@ TEMPLATES = {
     "고압가스작업계획서": {"columns": ["작업 항목", "작성 양식", "실무 예시"], "drop_columns": []}
 }
 
-# ✅ 출처 정의
 SOURCES = {
     "고소작업대작업계획서": "※ 본 양식은 산업안전보건기준에 관한 규칙 제34조를 기반으로 작성되었습니다.",
     "밀폐공간작업계획서": "※ 본 양식은 산업안전보건기준에 관한 규칙 제619~626조 및 밀폐공간 질식재해 예방 가이드를 기반으로 작성되었습니다.",
@@ -79,12 +63,23 @@ SOURCES = {
     "고압가스작업계획서": "※ 본 양식은 고압가스 안전관리법 시행규칙을 기반으로 작성되었습니다."
 }
 
-# ✅ 유사 키워드 자동 전환 함수
-def resolve_keyword(raw_keyword: str) -> str:
-    for alias, standard in KEYWORD_ALIAS.items():
-        if alias in raw_keyword:
-            return standard
-    return raw_keyword
+# ✅ 직무교육 링크 사전 (모두 원형 URL 사용)
+LINKS = {
+    "신규_안전관리자": "https://www.dutycenter.net/dutyedu/jfrt2200e?qryCourseDivCd=10&qryEduDiv=20&qryOrgCd=185E7D02A4CSTWOHBFPV",
+    "신규_보건관리자": "https://www.dutycenter.net/dutyedu/jfrt2200e?qryCourseDivCd=20&qryEduDiv=20&qryOrgCd=185E7D02A4CSTWOHBFPV",
+    "신규_책임자": "https://www.dutycenter.net/dutyedu/jfrt2200e?qryCourseDivCd=30&qryEduDiv=20&qryOrgCd=185E7D02A4CSTWOHBFPV",
+    "보수_안전관리자": "https://www.dutycenter.net/dutyedu/jfrt2200e?qryCourseDivCd=10&qryEduDiv=30&qryOrgCd=185E7D02A4CSTWOHBFPV",
+    "보수_보건관리자": "https://www.dutycenter.net/dutyedu/jfrt2200e?qryCourseDivCd=20&qryEduDiv=30&qryOrgCd=185E7D02A4CSTWOHBFPV",
+    "관리감독자": "https://forms.gle/yAfFMBTTxJu2WNmr5"
+}
+
+@app.route("/get_training_link", methods=["GET"])
+def get_training_link():
+    code = request.args.get("code", "")
+    url = LINKS.get(code)
+    if not url:
+        return jsonify({"error": f"'{code}'(으)로 등록된 링크가 없습니다."}), 404
+    return jsonify({"url": url})
 
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
@@ -99,10 +94,8 @@ def create_xlsx():
         return {"error": "CSV 원본 파일이 존재하지 않습니다."}, 404
 
     df = pd.read_csv(csv_path)
-
     drop_cols = TEMPLATES[template_name].get("drop_columns", [])
     df = df.drop(columns=[col for col in drop_cols if col in df.columns], errors="ignore")
-
     final_cols = TEMPLATES[template_name]["columns"]
     df = df[[col for col in final_cols if col in df.columns]]
 
@@ -112,8 +105,13 @@ def create_xlsx():
 
     xlsx_path = f"/mnt/data/{template_name}_최종양식.xlsx"
     df.to_excel(xlsx_path, index=False)
-
     return send_file(xlsx_path, as_attachment=True, download_name=f"{template_name}.xlsx")
+
+def resolve_keyword(raw_keyword: str) -> str:
+    for alias, standard in KEYWORD_ALIAS.items():
+        if alias in raw_keyword:
+            return standard
+    return raw_keyword
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
