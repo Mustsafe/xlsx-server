@@ -1,7 +1,9 @@
 services:
   - type: web
-    name: gpt-xlsx-converter
+    name: safety-gpt-api
     env: python
-    plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: python app.py
+    buildCommand: ""
+    startCommand: python merged_safety_gpt_flask_app.py
+    envVars:
+      - key: PORT
+        value: 10000
