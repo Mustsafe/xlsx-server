@@ -117,3 +117,38 @@ def create_xlsx():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
+import requests
+from bs4 import BeautifulSoup
+from flask import jsonify
+
+@app.route("/api/safety-news", methods=["GET"])
+def get_safety_news():
+    base_url = "https://www.safetynews.co.kr/news/articleList.html?sc_sub_section_code=S2N2"
+    response = requests.get(base_url)
+    soup = BeautifulSoup(response.text, "html.parser")
+    items = soup.select(".article-list-content")[:5]  # 상위 5개 뉴스만
+
+    news_list = []
+    for item in items:
+        title_el = item.select_one(".list-titles")
+        date_el = item.select_one(".list-dated")
+        link = title_el.get("href") if title_el else ""
+        full_url = "https://www.safetynews.co.kr" + link
+
+        detail_response = requests.get(full_url)
+        detail_soup = BeautifulSoup(detail_response.text, "html.parser")
+        content_el = detail_soup.select_one("#article-view-content-div")
+
+        news = {
+            "제목": title_el.text.strip() if title_el else "",
+            "날짜": date_el.text.strip() if date_el else "",
+            "링크": full_url,
+            "본문": content_el.text.strip()[:300] if content_el else "본문 없음"
+        }
+        news_list.append(news)
+
+    return jsonify(news_list)
+    
+# ✅ 반드시 맨 아래에 위치해야 합니다!
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
