@@ -27,6 +27,7 @@ KEYWORD_ALIAS = {
     "고압가스 작업 계획서": "고압가스작업계획서", "고압가스 계획서": "고압가스작업계획서"
 }
 
+# ✅ 템플릿 정의
 TEMPLATES = {
     "고소작업대작업계획서": {"columns": ["작업 항목", "작성 양식", "실무 예시"], "drop_columns": []},
     "밀폐공간작업계획서": {"columns": ["작업 항목", "작성 양식", "실무 예시"], "drop_columns": []},
@@ -45,25 +46,7 @@ TEMPLATES = {
     "고압가스작업계획서": {"columns": ["작업 항목", "작성 양식", "실무 예시"], "drop_columns": []}
 }
 
-SOURCES = {
-    "고소작업대작업계획서": "※ 본 양식은 산업안전보건기준에 관한 규칙 제34조를 기반으로 작성되었습니다.",
-    "밀폐공간작업계획서": "※ 본 양식은 산업안전보건기준에 관한 규칙 제619~626조 및 밀폐공간 질식재해 예방 가이드를 기반으로 작성되었습니다.",
-    "정전작업허가서": "※ 본 양식은 전기설비 정전 작업 안전지침에 따라 구성되었습니다.",
-    "해체작업계획서": "※ 본 양식은 산업안전보건기준에 관한 규칙 제526~529조에 따라 구성되었습니다.",
-    "크레인작업계획서": "※ 본 양식은 산업안전보건기준에 관한 규칙 제99조 및 양중기 안전기준에 따라 구성되었습니다.",
-    "고온작업허가서": "※ 본 양식은 고온 환경작업 시 열사병 예방 3대 수칙에 따라 작성되었습니다.",
-    "화기작업허가서": "※ 본 양식은 산업안전보건기준에 관한 규칙 제280조 기준을 따릅니다.",
-    "전기작업계획서": "※ 본 양식은 전기설비 작업 안전수칙과 절연 보호구 착용 기준을 반영하였습니다.",
-    "굴착기작업계획서": "※ 본 양식은 건설기계관리법 및 굴착기 안전 작업 기준을 기반으로 구성되었습니다.",
-    "용접용단작업허가서": "※ 본 양식은 용접·용단 작업 시 화재 및 유해가스 위험 예방 기준을 반영하였습니다.",
-    "전기작업허가서": "※ 본 양식은 고압 전기작업 안전 절차를 기반으로 구성되었습니다.",
-    "비계작업계획서": "※ 본 양식은 비계 설치·해체 작업 시 안전관리 지침을 기반으로 작성되었습니다.",
-    "협착위험작업계획서": "※ 본 양식은 협착위험 기계 작업 전 사전 점검 기준을 기반으로 작성되었습니다.",
-    "양중작업계획서": "※ 본 양식은 양중기 작업 안전수칙을 기반으로 작성되었습니다.",
-    "고압가스작업계획서": "※ 본 양식은 고압가스 안전관리법 시행규칙을 기반으로 작성되었습니다."
-}
-
-# ✅ 직무교육 링크 사전 (모두 원형 URL 사용)
+# ✅ 직무교육 링크 사전 (원형 URL 그대로)
 LINKS = {
     "신규_안전관리자": "https://www.dutycenter.net/dutyedu/jfrt2200e?qryCourseDivCd=10&qryEduDiv=20&qryOrgCd=185E7D02A4CSTWOHBFPV",
     "신규_보건관리자": "https://www.dutycenter.net/dutyedu/jfrt2200e?qryCourseDivCd=20&qryEduDiv=20&qryOrgCd=185E7D02A4CSTWOHBFPV",
@@ -80,6 +63,15 @@ def get_training_link():
     if not url:
         return jsonify({"error": f"'{code}'(으)로 등록된 링크가 없습니다."}), 404
     return jsonify({"url": url})
+
+# ✅ NEW: GPT 응답 내 #링크_코드 → 실링크로 치환
+@app.route("/replace_links", methods=["POST"])
+def replace_links():
+    data = request.json
+    content = data.get("content", "")
+    for code, url in LINKS.items():
+        content = content.replace(f"#링크_{code}", url)
+    return jsonify({"result": content})
 
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
@@ -98,20 +90,3 @@ def create_xlsx():
     df = df.drop(columns=[col for col in drop_cols if col in df.columns], errors="ignore")
     final_cols = TEMPLATES[template_name]["columns"]
     df = df[[col for col in final_cols if col in df.columns]]
-
-    if template_name in SOURCES:
-        source_text = SOURCES[template_name]
-        df.loc[len(df)] = [source_text] + [""] * (len(df.columns) - 1)
-
-    xlsx_path = f"/mnt/data/{template_name}_최종양식.xlsx"
-    df.to_excel(xlsx_path, index=False)
-    return send_file(xlsx_path, as_attachment=True, download_name=f"{template_name}.xlsx")
-
-def resolve_keyword(raw_keyword: str) -> str:
-    for alias, standard in KEYWORD_ALIAS.items():
-        if alias in raw_keyword:
-            return standard
-    return raw_keyword
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
