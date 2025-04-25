@@ -1,5 +1,3 @@
-# 🔧 Flask 기반 산업안전 작업계획서 + 뉴스 수집 API 병합 버전
-
 from flask import Flask, request, send_file, jsonify
 import pandas as pd
 import os
@@ -95,4 +93,5 @@ def get_news():
     return send_file(filename, as_attachment=True)
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
