@@ -70,28 +70,39 @@ def create_xlsx():
 
 @app.route("/daily_news", methods=["GET"])
 def get_news():
-    url = "https://search.naver.com/search.naver?where=news&query=산업안전"
-    response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
-    soup = BeautifulSoup(response.text, "html.parser")
-    news_items = soup.select(".list_news > li")[:5]
+    try:
+        url = "https://search.naver.com/search.naver?where=news&query=산업안전"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.get(url, headers=headers, timeout=10)
 
-    results = []
-    for item in news_items:
-        title_tag = item.select_one(".news_tit")
-        date_tag = item.select_one(".info_group span.date")
+        if response.status_code != 200:
+            return {"error": f"Failed to fetch news. Status: {response.status_code}"}, 500
 
-        if title_tag:
+        soup = BeautifulSoup(response.text, "html.parser")
+        news_items = soup.select(".list_news > li")[:5]
+
+        results = []
+        for item in news_items:
+            title_tag = item.select_one(".news_tit")
+            date_tag = item.select_one(".info_group span.date")
+
+            if not title_tag or not title_tag.get("title") or not title_tag.get("href"):
+                continue
+
             results.append({
                 "제목": title_tag["title"],
                 "링크": title_tag["href"],
-                "날짜": date_tag.text if date_tag else ""
+                "날짜": date_tag.text.strip() if date_tag else ""
             })
 
-    df = pd.DataFrame(results)
-    filename = f"/mnt/data/daily_safety_news_{datetime.now().strftime('%Y%m%d')}.csv"
-    df.to_csv(filename, index=False, encoding="utf-8-sig")
-    return send_file(filename, as_attachment=True)
+        if not results:
+            return {"error": "No news items found. Page structure may have changed."}, 500
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+        df = pd.DataFrame(results)
+        filename = f"/mnt/data/daily_safety_news_{datetime.now().strftime('%Y%m%d')}.csv"
+        df.to_csv(filename, index=False, encoding="utf-8-sig")
+        return send_file(filename, as_attachment=True)
+
+    except Exception as e:
+        return {"error": f"Internal Server Error: {str(e)}"}, 500
+
