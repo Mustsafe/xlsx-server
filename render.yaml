@@ -3,7 +3,7 @@ services:
     name: xlsx-server
     env: python
     buildCommand: ""
-    startCommand: python merged_safety_gpt_flask_app.py
+    startCommand: python app.py
     envVars:
       - key: OPENAI_API_KEY
         value: YOUR_OPENAI_API_KEY_HERE  # 여기에 OpenAI 키 입력 (선택)
