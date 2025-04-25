@@ -6,7 +6,7 @@ services:
     startCommand: python app.py
     envVars:
       - key: OPENAI_API_KEY
-        value: YOUR_OPENAI_API_KEY_HERE  # 여기에 OpenAI 키 입력 (선택)
+        value: YOUR_OPENAI_API_KEY_HERE
     plan: free
     region: oregon
     branch: main
