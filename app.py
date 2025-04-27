@@ -39,7 +39,7 @@ def resolve_keyword(raw_keyword: str) -> str:
             return standard
     return raw_keyword
 
-# ✅ 기존 작업계획서 엔드포인트 유지
+# ✅ 기존 작업계획서 엔드포인트
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
     raw_template = request.args.get("template", "")
@@ -68,10 +68,12 @@ def create_xlsx():
 
     return send_file(xlsx_path, as_attachment=True, download_name=f"{template_name}.xlsx")
 
-# ✅ 네이버 + 안전신문 통합 뉴스 크롤러 추가
+# ✅ 뉴스 크롤러: 네이버 + 안전신문 통합
 def crawl_naver_news():
     url = "https://search.naver.com/search.naver?where=news&query=산업안전"
-    headers = {"User-Agent": "Mozilla/5.0"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+    }
     response = requests.get(url, headers=headers, timeout=10)
     soup = BeautifulSoup(response.text, "html.parser")
     news_items = soup.select(".list_news > li")
@@ -113,16 +115,19 @@ def crawl_safetynews():
             })
     return results
 
-# ✅ 통합된 /daily_news API
+# ✅ 뉴스 통합 엔드포인트 + 에러 상세화
 @app.route("/daily_news", methods=["GET"])
 def get_daily_news():
     try:
         naver_news = crawl_naver_news()
         safety_news = crawl_safetynews()
 
+        if not naver_news:
+            return {"error": "네이버 뉴스 수집 실패"}, 500
+        if not safety_news:
+            return {"error": "안전신문 뉴스 수집 실패"}, 500
+
         all_news = naver_news + safety_news
-        if not all_news:
-            return {"error": "뉴스를 수집할 수 없습니다."}, 500
 
         df = pd.DataFrame(all_news)
         filename = f"/mnt/data/daily_safety_news_{datetime.now().strftime('%Y%m%d')}.csv"
@@ -133,7 +138,5 @@ def get_daily_news():
     except Exception as e:
         return {"error": f"Internal Server Error: {str(e)}"}, 500
 
-# ✅ 포트 수정해서 Render 호환
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=10000)
