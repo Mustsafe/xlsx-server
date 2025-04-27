@@ -7,7 +7,7 @@ from datetime import datetime
 
 app = Flask(__name__)
 
-# ✅ 기존 작업계획서 키워드 매핑
+# ✅ 기존 작업계획서 코드 유지
 KEYWORD_ALIAS = {
     "고소작업 계획서": "고소작업대작업계획서", "고소 작업 계획서": "고소작업대작업계획서",
     "고소작업대 계획서": "고소작업대작업계획서", "고소작업": "고소작업대작업계획서",
@@ -39,7 +39,7 @@ def resolve_keyword(raw_keyword: str) -> str:
             return standard
     return raw_keyword
 
-# ✅ 작업계획서 엑셀 생성
+# ✅ 작업계획서 엔드포인트
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
     raw_template = request.args.get("template", "")
@@ -68,70 +68,53 @@ def create_xlsx():
 
     return send_file(xlsx_path, as_attachment=True, download_name=f"{template_name}.xlsx")
 
-# ✅ 네이버 뉴스 크롤링
+# ✅ 네이버 뉴스 크롤링 최신화
 def crawl_naver_news():
     url = "https://search.naver.com/search.naver?where=news&query=산업안전"
     headers = {"User-Agent": "Mozilla/5.0"}
     response = requests.get(url, headers=headers, timeout=10)
-
-    if response.status_code != 200:
-        return []
-
     soup = BeautifulSoup(response.text, "html.parser")
-    news_items = soup.select(".list_news > li")
+    news_items = soup.select("div.news_area")
 
     results = []
     for item in news_items:
-        try:
-            title_tag = item.select_one(".news_tit")
-            date_tag = item.select_one(".info_group .date")
+        title_tag = item.select_one(".news_tit")
+        date_tag = item.select_one(".info_group span.date")
 
-            if title_tag and title_tag.get("title") and title_tag.get("href"):
-                results.append({
-                    "출처": "네이버",
-                    "제목": title_tag["title"],
-                    "링크": title_tag["href"],
-                    "날짜": date_tag.text.strip() if date_tag else datetime.now().strftime("%Y-%m-%d")
-                })
-        except Exception:
-            continue
-
+        if title_tag and title_tag.get("title") and title_tag.get("href"):
+            results.append({
+                "출처": "네이버",
+                "제목": title_tag["title"],
+                "링크": title_tag["href"],
+                "날짜": date_tag.text.strip() if date_tag else ""
+            })
     return results
 
-# ✅ 안전신문 뉴스 크롤링
+# ✅ 안전신문 크롤링
 def crawl_safetynews():
     url = "https://www.safetynews.co.kr/news/articleList.html?sc_sub_section_code=S2N2"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    response = requests.get(url, headers=headers, timeout=10)
-
-    if response.status_code != 200:
-        return []
-
+    response = requests.get(url)
     soup = BeautifulSoup(response.text, "html.parser")
     news_items = soup.select(".article-list-content")
 
     results = []
     for item in news_items:
-        try:
-            title_element = item.select_one(".list-titles")
-            date_element = item.select_one(".list-dated")
+        title_element = item.select_one(".list-titles")
+        date_element = item.select_one(".list-dated")
 
-            if title_element and title_element.get("href"):
-                title = title_element.text.strip()
-                link = "https://www.safetynews.co.kr" + title_element.get("href")
-                date = date_element.text.strip() if date_element else datetime.now().strftime("%Y-%m-%d")
-                results.append({
-                    "출처": "안전신문",
-                    "제목": title,
-                    "링크": link,
-                    "날짜": date
-                })
-        except Exception:
-            continue
-
+        if title_element:
+            title = title_element.text.strip()
+            link = "https://www.safetynews.co.kr" + title_element.get("href")
+            date = date_element.text.strip() if date_element else ""
+            results.append({
+                "출처": "안전신문",
+                "제목": title,
+                "링크": link,
+                "날짜": date
+            })
     return results
 
-# ✅ 뉴스 통합 /daily_news API
+# ✅ /daily_news 엔드포인트
 @app.route("/daily_news", methods=["GET"])
 def get_daily_news():
     try:
@@ -152,4 +135,4 @@ def get_daily_news():
         return {"error": f"Internal Server Error: {str(e)}"}, 500
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    app.run(host="0.0.0.0", port=5000)
