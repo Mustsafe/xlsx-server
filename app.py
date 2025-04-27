@@ -7,7 +7,7 @@ from datetime import datetime
 
 app = Flask(__name__)
 
-# ✅ 기존 작업계획서 코드 유지
+# ✅ 기존 작업계획서 키워드 매핑
 KEYWORD_ALIAS = {
     "고소작업 계획서": "고소작업대작업계획서", "고소 작업 계획서": "고소작업대작업계획서",
     "고소작업대 계획서": "고소작업대작업계획서", "고소작업": "고소작업대작업계획서",
@@ -39,7 +39,7 @@ def resolve_keyword(raw_keyword: str) -> str:
             return standard
     return raw_keyword
 
-# ✅ 기존 작업계획서 엔드포인트
+# ✅ 작업계획서 엑셀 생성
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
     raw_template = request.args.get("template", "")
@@ -68,66 +68,79 @@ def create_xlsx():
 
     return send_file(xlsx_path, as_attachment=True, download_name=f"{template_name}.xlsx")
 
-# ✅ 뉴스 크롤러: 네이버 + 안전신문 통합
+# ✅ 네이버 뉴스 크롤링
 def crawl_naver_news():
     url = "https://search.naver.com/search.naver?where=news&query=산업안전"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
-    }
+    headers = {"User-Agent": "Mozilla/5.0"}
     response = requests.get(url, headers=headers, timeout=10)
+
+    if response.status_code != 200:
+        return []
+
     soup = BeautifulSoup(response.text, "html.parser")
     news_items = soup.select(".list_news > li")
 
     results = []
     for item in news_items:
-        title_tag = item.select_one(".news_tit")
-        date_tag = item.select_one(".info_group span.date")
+        try:
+            title_tag = item.select_one(".news_tit")
+            date_tag = item.select_one(".info_group .date")
 
-        if title_tag and title_tag.get("title") and title_tag.get("href"):
-            results.append({
-                "출처": "네이버",
-                "제목": title_tag["title"],
-                "링크": title_tag["href"],
-                "날짜": date_tag.text.strip() if date_tag else ""
-            })
+            if title_tag and title_tag.get("title") and title_tag.get("href"):
+                results.append({
+                    "출처": "네이버",
+                    "제목": title_tag["title"],
+                    "링크": title_tag["href"],
+                    "날짜": date_tag.text.strip() if date_tag else datetime.now().strftime("%Y-%m-%d")
+                })
+        except Exception:
+            continue
+
     return results
 
+# ✅ 안전신문 뉴스 크롤링
 def crawl_safetynews():
     url = "https://www.safetynews.co.kr/news/articleList.html?sc_sub_section_code=S2N2"
-    response = requests.get(url)
+    headers = {"User-Agent": "Mozilla/5.0"}
+    response = requests.get(url, headers=headers, timeout=10)
+
+    if response.status_code != 200:
+        return []
+
     soup = BeautifulSoup(response.text, "html.parser")
     news_items = soup.select(".article-list-content")
 
     results = []
     for item in news_items:
-        title_element = item.select_one(".list-titles")
-        date_element = item.select_one(".list-dated")
+        try:
+            title_element = item.select_one(".list-titles")
+            date_element = item.select_one(".list-dated")
 
-        if title_element:
-            title = title_element.text.strip()
-            link = "https://www.safetynews.co.kr" + title_element.get("href")
-            date = date_element.text.strip() if date_element else ""
-            results.append({
-                "출처": "안전신문",
-                "제목": title,
-                "링크": link,
-                "날짜": date
-            })
+            if title_element and title_element.get("href"):
+                title = title_element.text.strip()
+                link = "https://www.safetynews.co.kr" + title_element.get("href")
+                date = date_element.text.strip() if date_element else datetime.now().strftime("%Y-%m-%d")
+                results.append({
+                    "출처": "안전신문",
+                    "제목": title,
+                    "링크": link,
+                    "날짜": date
+                })
+        except Exception:
+            continue
+
     return results
 
-# ✅ 뉴스 통합 엔드포인트 + 에러 상세화
+# ✅ 뉴스 통합 /daily_news API
 @app.route("/daily_news", methods=["GET"])
 def get_daily_news():
     try:
         naver_news = crawl_naver_news()
         safety_news = crawl_safetynews()
 
-        if not naver_news:
-            return {"error": "네이버 뉴스 수집 실패"}, 500
-        if not safety_news:
-            return {"error": "안전신문 뉴스 수집 실패"}, 500
-
         all_news = naver_news + safety_news
+        if not all_news:
+            return {"error": "오늘 가져올 수 있는 뉴스가 없습니다."}, 500
 
         df = pd.DataFrame(all_news)
         filename = f"/mnt/data/daily_safety_news_{datetime.now().strftime('%Y%m%d')}.csv"
