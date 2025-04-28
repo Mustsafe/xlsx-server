@@ -11,7 +11,11 @@ DATA_DIR = "./data"
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
-# 작업계획서 키워드 매핑 (기존 매핑 전체 포함)
+# 네이버 오픈 API 자격증명 (실제론 환경변수로 관리하세요)
+NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID", "QK5pGnOogpbtXc2_AQAQ")
+NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET", "xjH5Nn5auL")
+
+# 작업계획서 키워드 매핑
 KEYWORD_ALIAS = {
     "고소작업 계획서": "고소작업대작업계획서", "고소 작업 계획서": "고소작업대작업계획서",
     "고소작업대 계획서": "고소작업대작업계획서", "고소작업": "고소작업대작업계획서",
@@ -38,24 +42,16 @@ TEMPLATES = {
     name: {"columns": ["작업 항목", "작성 양식", "실무 예시"], "drop_columns": []}
     for name in KEYWORD_ALIAS.values()
 }
-
 SOURCES = {
     name: f"※ 본 양식은 {name} 관련 법령 또는 지침을 기반으로 작성되었습니다."
     for name in KEYWORD_ALIAS.values()
 }
 
-
 def resolve_keyword(raw_keyword: str) -> str:
-    for alias, standard in KEYWORD_ALIAS.items():
+    for alias, std in KEYWORD_ALIAS.items():
         if alias in raw_keyword:
-            return standard
+            return std
     return raw_keyword
-
-
-@app.route("/", methods=["GET"])
-def index():
-    return jsonify({"message": "안전관리 앱이 정상 동작 중입니다."})
-
 
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
@@ -80,69 +76,46 @@ def create_xlsx():
     df.to_excel(xlsx_path, index=False)
     return send_file(xlsx_path, as_attachment=True, download_name=f"{tpl}.xlsx")
 
-
-def fetch_naver_article_content(url: str) -> str:
+def fetch_safetynews_article_content(url):
     try:
-        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
+        headers = {"User-Agent": "Mozilla/5.0"}
+        resp = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(resp.text, "html.parser")
-        if node := soup.select_one("div#dic_area"):
-            return node.get_text("\n").strip()
-        if node := soup.select_one("article"):
-            return node.get_text("\n").strip()
-        return "(본문 수집 실패)"
-    except Exception as e:
-        app.logger.warning(f"Naver 본문 수집 오류: {e}")
+        node = soup.select_one("div#article-view-content-div")
+        return node.get_text("\n").strip() if node else "(본문 수집 실패)"
+    except Exception:
         return "(본문 수집 실패)"
 
-
-def fetch_safetynews_article_content(url: str) -> str:
-    try:
-        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
-        soup = BeautifulSoup(resp.text, "html.parser")
-        if node := soup.select_one("div#article-view-content-div"):
-            return node.get_text("\n").strip()
-        return "(본문 수집 실패)"
-    except Exception as e:
-        app.logger.warning(f"SafetyNews 본문 수집 오류: {e}")
-        return "(본문 수집 실패)"
-
-
-def crawl_naver_news() -> list:
-    base = "https://search.naver.com/search.naver"
+def crawl_naver_news():
+    base_url = "https://openapi.naver.com/v1/search/news.json"
+    headers = {
+        "X-Naver-Client-Id": NAVER_CLIENT_ID,
+        "X-Naver-Client-Secret": NAVER_CLIENT_SECRET
+    }
     keywords = [
         "건설 사고", "건설 사망사고", "추락 사고", "끼임 사고",
         "질식 사고", "폭발 사고", "산업재해", "산업안전"
     ]
     out = []
     for kw in keywords:
-        try:
-            resp = requests.get(
-                base,
-                params={"where": "news", "query": kw},
-                headers={"User-Agent": "Mozilla/5.0"},
-                timeout=20
-            )
-            if resp.status_code != 200:
-                continue
-            soup = BeautifulSoup(resp.text, "html.parser")
-            for item in soup.select(".list_news > li")[:2]:
-                t = item.select_one(".news_tit")
-                href = t["href"] if t else None
-                d = item.select_one(".info_group span.date")
-                content = fetch_naver_article_content(href) if href else ""
-                out.append({
-                    "출처": "네이버",
-                    "제목": t["title"] if t else "",
-                    "링크": href,
-                    "날짜": d.text.strip() if d else "",
-                    "본문": content[:1000]
-                })
-        except Exception as e:
-            app.logger.warning(f"Naver 크롤링 오류({kw}): {e}")
+        params = {"query": kw, "display": 2, "sort": "date"}
+        resp = requests.get(base_url, headers=headers, params=params, timeout=10)
+        if resp.status_code != 200:
+            continue
+        for item in resp.json().get("items", []):
+            title = BeautifulSoup(item.get("title", ""), "html.parser").get_text()
+            desc  = BeautifulSoup(item.get("description", ""), "html.parser").get_text()
+            link  = item.get("link", "")
+            out.append({
+                "출처": item.get("originallink", "네이버"),
+                "제목": title,
+                "링크": link,
+                "날짜": "",
+                "본문": desc
+            })
     return out
 
-
-def crawl_safetynews() -> list:
+def crawl_safetynews():
     base = "https://www.safetynews.co.kr"
     keywords = [
         "건설 사고", "건설 사망사고", "추락 사고", "끼임 사고",
@@ -150,31 +123,27 @@ def crawl_safetynews() -> list:
     ]
     out = []
     for kw in keywords:
-        try:
-            resp = requests.get(
-                f"{base}/search/news?searchword={kw}",
-                headers={"User-Agent": "Mozilla/5.0"},
-                timeout=20
-            )
-            if resp.status_code != 200:
-                continue
-            soup = BeautifulSoup(resp.text, "html.parser")
-            for item in soup.select(".article-list-content")[:2]:
-                t = item.select_one(".list-titles")
-                href = base + t["href"] if t else None
-                d = item.select_one(".list-dated")
-                content = fetch_safetynews_article_content(href) if href else ""
-                out.append({
-                    "출처": "안전신문",
-                    "제목": t.text.strip() if t else "",
-                    "링크": href,
-                    "날짜": d.text.strip() if d else "",
-                    "본문": content[:1000]
-                })
-        except Exception as e:
-            app.logger.warning(f"SafetyNews 크롤링 오류({kw}): {e}")
+        resp = requests.get(
+            f"{base}/search/news?searchword={kw}",
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=10
+        )
+        if resp.status_code != 200:
+            continue
+        soup = BeautifulSoup(resp.text, "html.parser")
+        for item in soup.select(".article-list-content")[:2]:
+            t    = item.select_one(".list-titles")
+            href = base + t["href"] if t and t.get("href") else None
+            d    = item.select_one(".list-dated")
+            content = fetch_safetynews_article_content(href) if href else ""
+            out.append({
+                "출처": "안전신문",
+                "제목": t.get_text(strip=True) if t else "",
+                "링크": href,
+                "날짜": d.get_text(strip=True) if d else "",
+                "본문": content[:1000]
+            })
     return out
-
 
 @app.route("/daily_news", methods=["GET"])
 def get_daily_news():
@@ -184,9 +153,7 @@ def get_daily_news():
             return {"error": "가져올 뉴스가 없습니다."}, 200
         return jsonify(news)
     except Exception as e:
-        app.logger.error(f"통합 뉴스 엔드포인트 오류: {e}")
         return {"error": f"Internal Server Error: {e}"}, 500
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
