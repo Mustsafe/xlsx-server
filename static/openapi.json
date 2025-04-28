@@ -6,7 +6,10 @@
     "description": "최신 산업 안전 뉴스를 수집하고 포맷팅합니다."
   },
   "servers": [
-    { "url": "https://xlsx-server.onrender.com" }
+    {
+      "url": "https://xlsx-server.onrender.com",
+      "description": "Production server"
+    }
   ],
   "paths": {
     "/daily_news": {
