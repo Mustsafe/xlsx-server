@@ -3,7 +3,6 @@ import pandas as pd
 import os
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime, timedelta
 import openai
 
 app = Flask(__name__)
@@ -18,10 +17,10 @@ if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
 # 네이버 오픈 API 자격증명 (실제론 환경변수로 관리)
-NAVER_CLIENT_ID     = os.getenv("NAVER_CLIENT_ID")
+NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID")
 NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
 
-# 작업계획서 키워드 매핑 (기존에 쓰시던 전체 매핑 그대로)
+# 작업계획서 키워드 매핑 (전부 포함)
 KEYWORD_ALIAS = {
     "고소작업 계획서": "고소작업대작업계획서", "고소 작업 계획서": "고소작업대작업계획서",
     "고소작업대 계획서": "고소작업대작업계획서", "고소작업": "고소작업대작업계획서",
@@ -59,7 +58,7 @@ def resolve_keyword(raw_keyword: str) -> str:
             return std
     return raw_keyword
 
-# ──────────── XLSX 생성 ────────────
+# XLSX 생성
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
     raw = request.args.get("template", "")
@@ -83,7 +82,7 @@ def create_xlsx():
     df.to_excel(xlsx_path, index=False)
     return send_file(xlsx_path, as_attachment=True, download_name=f"{tpl}.xlsx")
 
-# ───────── SafetyNews 본문 추출 ─────────
+# SafetyNews 본문 추출
 def fetch_safetynews_article_content(url):
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -91,10 +90,10 @@ def fetch_safetynews_article_content(url):
         soup = BeautifulSoup(resp.text, "html.parser")
         node = soup.select_one("div#article-view-content-div")
         return node.get_text("\n").strip() if node else "(본문 수집 실패)"
-    except:
+    except Exception:
         return "(본문 수집 실패)"
 
-# ───────── 네이버 뉴스 Open API 크롤링 ─────────
+# 네이버 뉴스 Open API 크롤링
 def crawl_naver_news():
     base_url = "https://openapi.naver.com/v1/search/news.json"
     headers = {
@@ -112,20 +111,19 @@ def crawl_naver_news():
         if resp.status_code != 200:
             continue
         for item in resp.json().get("items", []):
-            title = BeautifulSoup(item.get("title",""), "html.parser").get_text()
-            desc  = BeautifulSoup(item.get("description",""), "html.parser").get_text()
-            link  = item.get("link","")
-            pub   = item.get("pubDate","")  # RFC1123
+            title = BeautifulSoup(item.get("title", ""), "html.parser").get_text()
+            desc  = BeautifulSoup(item.get("description", ""), "html.parser").get_text()
+            link  = item.get("link", "")
             out.append({
-                "출처": item.get("originallink","네이버"),
+                "출처": item.get("originallink", "네이버"),
                 "제목": title,
                 "링크": link,
-                "날짜": pub,
+                "날짜": "",  # Open API에 날짜 필드가 없으면 비워두세요
                 "본문": desc
             })
     return out
 
-# ───────── SafetyNews 크롤링 ─────────
+# SafetyNews 크롤링
 def crawl_safetynews():
     base = "https://www.safetynews.co.kr"
     keywords = [
@@ -134,8 +132,11 @@ def crawl_safetynews():
     ]
     out = []
     for kw in keywords:
-        resp = requests.get(f"{base}/search/news?searchword={kw}",
-                            headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        resp = requests.get(
+            f"{base}/search/news?searchword={kw}",
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=10
+        )
         if resp.status_code != 200:
             continue
         soup = BeautifulSoup(resp.text, "html.parser")
@@ -153,56 +154,45 @@ def crawl_safetynews():
             })
     return out
 
-# ───────── 날짜 파싱 도우미 ─────────
-def parse_date(date_str: str):
-    for fmt in ("%Y.%m.%d", "%a, %d %b %Y %H:%M:%S %z"):
-        try:
-            return datetime.strptime(date_str, fmt)
-        except:
-            continue
-    return None
+# ❶ 원본 뉴스 JSON 반환
+@app.route("/daily_news", methods=["GET"])
+def get_daily_news():
+    news = crawl_naver_news() + crawl_safetynews()
+    if not news:
+        return jsonify({"error": "가져올 뉴스가 없습니다."}), 200
+    return jsonify(news)
 
-# ───────── GPT로 뉴스 포맷팅 ─────────
+# ❷ GPT 포맷팅 뉴스 반환
 @app.route("/render_news", methods=["GET"])
 def render_news():
-    # 1) 크롤링
-    news = crawl_naver_news() + crawl_safetynews()
+    news_items = crawl_naver_news() + crawl_safetynews()
+    if not news_items:
+        return jsonify({"error": "가져올 뉴스가 없습니다."}), 200
 
-    # 2) 최근 3일치 필터
-    cutoff = datetime.now() - timedelta(days=3)
-    recent = []
-    for i in news:
-        dt = parse_date(i.get("날짜",""))
-        if dt and dt >= cutoff:
-            i["_dt"] = dt
-            recent.append(i)
-    if not recent:
-        return jsonify({"error": "최근 3일 내 뉴스가 없습니다."}), 200
-
-    # 3) 최신순 상위 3개
-    top3 = sorted(recent, key=lambda x: x["_dt"], reverse=True)[:3]
-
-    # 4) GPT 호출
-    template_txt = (
+    template_text = (
         "📌 산업 안전 및 보건 최신 뉴스\n"
-        "📰 “{제목}” ({날짜}, {출처})\n\n"
-        "{본문}\n"
-        "🔎 {추천메시지}\n"
+        "📰 “{title}” ({date}, {source})\n\n"
+        "{headline}\n"
+        "🔎 {recommendation}\n"
         "👉 요약 제공됨 · “뉴스 더 보여줘” 입력 시 유사 사례 추가 확인 가능"
     )
-    sys_msg = {
+    system_message = {
         "role": "system",
-        "content": "다음 JSON 형식의 뉴스 목록을 위 템플릿에 맞춰 3개 항목으로 출력하세요.\n템플릿:\n" + template_txt
+        "content": (
+            "다음 JSON 형식의 뉴스 목록을 아래 템플릿에 맞춰 3개 항목 출력하세요.\n"
+            f"템플릿:\n{template_text}"
+        )
     }
-    user_msg = {"role": "user", "content": str(top3)}
+    user_message = {"role": "user", "content": str(news_items)}
 
     resp = openai.ChatCompletion.create(
         model="gpt-4o-mini",
-        messages=[sys_msg, user_msg],
+        messages=[system_message, user_message],
         max_tokens=800,
         temperature=0.7
     )
-    return jsonify({"formatted_news": resp.choices[0].message.content})
+    output = resp.choices[0].message.content
+    return jsonify({"formatted_news": output})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
