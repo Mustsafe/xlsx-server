@@ -12,11 +12,27 @@ DATA_DIR = "./data"
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
-# 작업계획서 키워드 매핑
+# 작업계획서 키워드 매핑 (기존에 쓰시던 그대로)
 KEYWORD_ALIAS = {
-    "고소작업 계획서": "고소작업대작업계획서",
-    "고소 작업 계획서": "고소작업대작업계획서",
-    # ... (생략) 나머지 매핑도 동일하게 추가 ...
+    "고소작업 계획서": "고소작업대작업계획서", "고소 작업 계획서": "고소작업대작업계획서",
+    "고소작업대 계획서": "고소작업대작업계획서", "고소작업": "고소작업대작업계획서",
+    "밀폐공간 계획서": "밀폐공간작업계획서", "밀폐공간 작업 계획서": "밀폐공간작업계획서",
+    "밀폐공간작업 계획서": "밀폐공간작업계획서", "밀폐공간": "밀폐공간작업계획서",
+    "정전 작업 허가서": "정전작업허가서", "정전작업": "정전작업허가서",
+    "해체 작업계획서": "해체작업계획서", "해체 계획서": "해체작업계획서",
+    "구조물 해체 계획": "해체작업계획서", "해체작업": "해체작업계획서",
+    "크레인 계획서": "크레인작업계획서", "크레인 작업 계획서": "크레인작업계획서",
+    "양중기 작업계획서": "크레인작업계획서",
+    "고온 작업 허가서": "고온작업허가서", "고온작업": "고온작업허가서",
+    "화기작업 허가서": "화기작업허가서", "화기 작업계획서": "화기작업허가서", "화기작업": "화기작업허가서",
+    "전기 작업계획서": "전기작업계획서", "전기 계획서": "전기작업계획서", "전기작업": "전기작업계획서",
+    "굴착기 작업계획서": "굴착기작업계획서", "굴착기 계획서": "굴착기작업계획서", "굴삭기 작업계획서": "굴착기작업계획서",
+    "용접작업 계획서": "용접용단작업허가서", "용접용단 계획서": "용접용단작업허가서", "용접작업": "용접용단작업허가서",
+    "전기 작업 허가서": "전기작업허가서", "고압 전기작업 계획서": "전기작업허가서", "전기 허가서": "전기작업허가서",
+    "비계 작업 계획서": "비계작업계획서", "비계 계획서": "비계작업계획서", "비계작업계획": "비계작업계획서",
+    "협착 작업 계획서": "협착위험작업계획서", "협착 계획서": "협착위험작업계획서",
+    "양중 작업 계획서": "양중작업계획서", "양중기 작업계획서": "양중작업계획서",
+    "고압가스 작업 계획서": "고압가스작업계획서", "고압가스 계획서": "고압가스작업계획서"
 }
 
 TEMPLATES = {
@@ -29,9 +45,9 @@ SOURCES = {
 }
 
 def resolve_keyword(raw_keyword: str) -> str:
-    for alias, std in KEYWORD_ALIAS.items():
+    for alias, standard in KEYWORD_ALIAS.items():
         if alias in raw_keyword:
-            return std
+            return standard
     return raw_keyword
 
 @app.route("/create_xlsx", methods=["GET"])
@@ -57,7 +73,6 @@ def create_xlsx():
     df.to_excel(xlsx_path, index=False)
     return send_file(xlsx_path, as_attachment=True, download_name=f"{tpl}.xlsx")
 
-
 def fetch_naver_article_content(url):
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -71,7 +86,6 @@ def fetch_naver_article_content(url):
     except Exception:
         return "(본문 수집 실패)"
 
-
 def fetch_safetynews_article_content(url):
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -81,7 +95,6 @@ def fetch_safetynews_article_content(url):
         return node.get_text("\n").strip() if node else "(본문 수집 실패)"
     except Exception:
         return "(본문 수집 실패)"
-
 
 def crawl_naver_news():
     base = "https://search.naver.com/search.naver"
@@ -114,7 +127,6 @@ def crawl_naver_news():
             })
     return out
 
-
 def crawl_safetynews():
     base = "https://www.safetynews.co.kr"
     keywords = [
@@ -145,7 +157,6 @@ def crawl_safetynews():
             })
     return out
 
-
 @app.route("/daily_news", methods=["GET"])
 def get_daily_news():
     try:
@@ -155,7 +166,6 @@ def get_daily_news():
         return jsonify(news)
     except Exception as e:
         return {"error": f"Internal Server Error: {e}"}, 500
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
