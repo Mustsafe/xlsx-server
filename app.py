@@ -7,12 +7,12 @@ from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
-# ✅ 수정된 부분: ./data 디렉토리 사용
+# ✅ 데이터 저장 디렉토리
 DATA_DIR = "./data"
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
-# ✅ 기존 작업계획서 키워드 매핑 유지
+# ✅ 작업계획서 키워드 매핑
 KEYWORD_ALIAS = {
     "고소작업 계획서": "고소작업대작업계획서", "고소 작업 계획서": "고소작업대작업계획서",
     "고소작업대 계획서": "고소작업대작업계획서", "고소작업": "고소작업대작업계획서",
@@ -44,7 +44,7 @@ def resolve_keyword(raw_keyword: str) -> str:
             return standard
     return raw_keyword
 
-# ✅ 작업계획서 xlsx 생성 엔드포인트
+# ✅ 작업계획서 xlsx 생성
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
     raw_template = request.args.get("template", "")
@@ -73,8 +73,8 @@ def create_xlsx():
 
     return send_file(xlsx_path, as_attachment=True, download_name=f"{template_name}.xlsx")
 
-# ✅ 네이버 뉴스 크롤링 (본문 추가, 2개 제한)
-def crawl_naver_news():
+# ✅ 네이버 뉴스 크롤링 (본문 포함)
+def crawl_naver_news(limit=2):
     base_url = "https://search.naver.com/search.naver"
     keywords = ["건설 사고", "건설 사망사고", "추락 사고", "끼임 사고", "질식 사고", "폭발 사고", "산업재해", "산업안전"]
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -84,29 +84,37 @@ def crawl_naver_news():
         params = {"where": "news", "query": keyword}
         response = requests.get(base_url, params=params, headers=headers, timeout=10)
         soup = BeautifulSoup(response.text, "html.parser")
-        news_items = soup.select(".list_news > li")[:2]
+        news_items = soup.select(".list_news > li")[:limit]
 
         for item in news_items:
             title_tag = item.select_one(".news_tit")
             date_tag = item.select_one(".info_group span.date")
+            link = title_tag["href"] if title_tag else None
+            title = title_tag["title"] if title_tag else ""
 
-            if title_tag and title_tag.get("href"):
-                article_url = title_tag.get("href")
-                article_res = requests.get(article_url, headers=headers, timeout=10)
-                article_soup = BeautifulSoup(article_res.text, "html.parser")
-                article_content = article_soup.get_text(" ", strip=True)
+            # 본문 크롤링
+            content = ""
+            if link:
+                try:
+                    article = requests.get(link, headers=headers, timeout=10)
+                    article_soup = BeautifulSoup(article.text, "html.parser")
+                    paragraphs = article_soup.find_all("p")
+                    content = " ".join([p.get_text(strip=True) for p in paragraphs])
+                except:
+                    content = "(본문 가져오기 실패)"
 
+            if title and link:
                 collected.append({
                     "출처": "네이버",
-                    "제목": title_tag["title"],
-                    "링크": article_url,
+                    "제목": title,
+                    "링크": link,
                     "날짜": date_tag.text.strip() if date_tag else "",
-                    "본문": article_content[:500]
+                    "본문": content[:1000]  # 길이 제한
                 })
     return collected
 
-# ✅ 안전신문 뉴스 크롤링 (본문 추가, 2개 제한)
-def crawl_safetynews():
+# ✅ 안전신문 크롤링 (본문 포함)
+def crawl_safetynews(limit=2):
     base_url = "https://www.safetynews.co.kr"
     keywords = ["건설 사고", "건설 사망사고", "추락 사고", "끼임 사고", "질식 사고", "폭발 사고", "산업재해", "산업안전"]
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -116,34 +124,41 @@ def crawl_safetynews():
         search_url = f"{base_url}/search/news?searchword={keyword}"
         response = requests.get(search_url, headers=headers, timeout=10)
         soup = BeautifulSoup(response.text, "html.parser")
-        news_items = soup.select(".article-list-content")[:2]
+        news_items = soup.select(".article-list-content")[:limit]
 
         for item in news_items:
             title_element = item.select_one(".list-titles")
             date_element = item.select_one(".list-dated")
+            link = base_url + title_element.get("href") if title_element else None
+            title = title_element.text.strip() if title_element else ""
 
-            if title_element and title_element.get("href"):
-                article_url = base_url + title_element.get("href")
-                article_res = requests.get(article_url, headers=headers, timeout=10)
-                article_soup = BeautifulSoup(article_res.text, "html.parser")
-                article_content = article_soup.get_text(" ", strip=True)
+            # 본문 크롤링
+            content = ""
+            if link:
+                try:
+                    article = requests.get(link, headers=headers, timeout=10)
+                    article_soup = BeautifulSoup(article.text, "html.parser")
+                    paragraphs = article_soup.find_all("p")
+                    content = " ".join([p.get_text(strip=True) for p in paragraphs])
+                except:
+                    content = "(본문 가져오기 실패)"
 
+            if title and link:
                 collected.append({
                     "출처": "안전신문",
-                    "제목": title_element.text.strip(),
-                    "링크": article_url,
+                    "제목": title,
+                    "링크": link,
                     "날짜": date_element.text.strip() if date_element else "",
-                    "본문": article_content[:500]
+                    "본문": content[:1000]  # 길이 제한
                 })
     return collected
 
-# ✅ 통합 뉴스 크롤링 엔드포인트 (json 반환)
+# ✅ 뉴스 통합 크롤링
 @app.route("/daily_news", methods=["GET"])
 def get_daily_news():
     try:
         naver_news = crawl_naver_news()
         safety_news = crawl_safetynews()
-
         all_news = naver_news + safety_news
 
         today = datetime.now()
