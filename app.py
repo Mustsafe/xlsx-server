@@ -12,6 +12,11 @@ DATA_DIR = "/mnt/data"
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
+# ✅ 헬스체크용 루트 엔드포인트 추가
+@app.route("/", methods=["GET"])
+def home():
+    return "Server is running!", 200
+
 # ✅ 기존 작업계획서 키워드 매핑
 KEYWORD_ALIAS = {
     "고소작업 계획서": "고소작업대작업계획서", "고소 작업 계획서": "고소작업대작업계획서",
@@ -44,7 +49,7 @@ def resolve_keyword(raw_keyword: str) -> str:
             return standard
     return raw_keyword
 
-# ✅ 작업계획서 xlsx 생성
+# ✅ 작업계획서 생성 API
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
     raw_template = request.args.get("template", "")
@@ -100,7 +105,7 @@ def crawl_naver_news():
                 })
     return collected
 
-# ✅ 안전신문 크롤링
+# ✅ 안전신문 뉴스 크롤링
 def crawl_safetynews():
     base_url = "https://www.safetynews.co.kr"
     keywords = ["건설 사고", "건설 사망사고", "추락 사고", "끼임 사고", "질식 사고", "폭발 사고", "산업재해", "산업안전"]
@@ -131,20 +136,15 @@ def crawl_safetynews():
                 })
     return collected
 
-# ✅ 통합 뉴스 크롤링
+# ✅ 통합 뉴스 크롤링 엔드포인트
 @app.route("/daily_news", methods=["GET"])
 def get_daily_news():
     try:
-        # 🛠 여기 추가 (핵심)
-        if not os.path.exists(DATA_DIR):
-            os.makedirs(DATA_DIR)
-
         naver_news = crawl_naver_news()
         safety_news = crawl_safetynews()
 
         all_news = naver_news + safety_news
 
-        # 최근 7일 필터
         today = datetime.now()
         one_week_ago = today - timedelta(days=7)
 
