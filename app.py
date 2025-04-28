@@ -4,6 +4,8 @@ import os
 import requests
 from bs4 import BeautifulSoup
 import openai
+from dateutil import parser
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False  # 한글 깨짐 방지
@@ -58,6 +60,10 @@ def resolve_keyword(raw_keyword: str) -> str:
             return std
     return raw_keyword
 
+@app.route("/", methods=["GET"])
+def index():
+    return "📰 사용 가능한 엔드포인트: /daily_news, /render_news, /create_xlsx", 200
+
 # XLSX 생성
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
@@ -111,14 +117,15 @@ def crawl_naver_news():
         if resp.status_code != 200:
             continue
         for item in resp.json().get("items", []):
-            title = BeautifulSoup(item.get("title", ""), "html.parser").get_text()
-            desc  = BeautifulSoup(item.get("description", ""), "html.parser").get_text()
-            link  = item.get("link", "")
+            title   = BeautifulSoup(item.get("title",""), "html.parser").get_text()
+            desc    = BeautifulSoup(item.get("description",""), "html.parser").get_text()
+            link    = item.get("link","")
+            pubdate = item.get("pubDate","")  # e.g. "Tue, 28 Apr 2025 07:00:00 +0900"
             out.append({
-                "출처": item.get("originallink", "네이버"),
+                "출처": item.get("originallink","네이버"),
                 "제목": title,
                 "링크": link,
-                "날짜": "",  # Open API에 날짜 필드가 없으면 비워두세요
+                "날짜": pubdate,
                 "본문": desc
             })
     return out
@@ -162,10 +169,25 @@ def get_daily_news():
         return jsonify({"error": "가져올 뉴스가 없습니다."}), 200
     return jsonify(news)
 
-# ❷ GPT 포맷팅 뉴스 반환
+# ❷ GPT 포맷팅 뉴스 반환 (최신 3일 이내, 최대 3개)
 @app.route("/render_news", methods=["GET"])
 def render_news():
-    news_items = crawl_naver_news() + crawl_safetynews()
+    raw = crawl_naver_news() + crawl_safetynews()
+    # 3일 전 cutoff
+    cutoff = datetime.utcnow() - timedelta(days=3)
+    filtered = []
+    for n in raw:
+        try:
+            dt = parser.parse(n["날짜"])
+        except Exception:
+            continue
+        if dt >= cutoff:
+            # 날짜 포맷 통일
+            n["날짜"] = dt.strftime("%Y.%m.%d")
+            filtered.append(n)
+    # 최신순 정렬 및 최대 3개
+    news_items = sorted(filtered, key=lambda x: parser.parse(x["날짜"]), reverse=True)[:3]
+
     if not news_items:
         return jsonify({"error": "가져올 뉴스가 없습니다."}), 200
 
