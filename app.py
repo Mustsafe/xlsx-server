@@ -32,14 +32,27 @@ def serve_well_known(filename):
         mimetype="application/json"
     )
 
+from flask import send_from_directory
+import os
+
 # ❷ OpenAPI 스펙과 로고 파일도 루트에서 바로 접근 가능하게
 @app.route("/openapi.json")
 def serve_openapi():
-    return send_from_directory(app.root_path, "static", "openapi.json", mimetype="application/json")
+    return send_from_directory(
+        # directory 인자: 실제 파일이 있는 디렉토리 경로
+        os.path.join(app.root_path, "static"),
+        # filename 인자: 그 디렉토리 안의 파일 이름
+        "openapi.json",
+        mimetype="application/json"
+    )
 
 @app.route("/logo.png")
 def serve_logo():
-    return send_from_directory(app.root_path, "static", "logo.png", mimetype="image/png")
+    return send_from_directory(
+        os.path.join(app.root_path, "static"),
+        "logo.png",
+        mimetype="image/png"
+    )
 
 
 # 네이버 오픈 API 자격증명 (실제론 환경변수로 관리)
