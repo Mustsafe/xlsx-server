@@ -18,6 +18,30 @@ DATA_DIR = "./data"
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
+from flask import send_from_directory
+
+# (기존 코드 위쪽에 넣으시면 됩니다)
+
+# ❶ 플러그인 매니페스트 서빙
+@app.route("/.well-known/<path:filename>")
+def serve_well_known(filename):
+    # 프로젝트 루트/static/.well-known 폴더에서 파일 찾기
+    return send_from_directory(
+        os.path.join(app.root_path, "static", ".well-known"),
+        filename,
+        mimetype="application/json"
+    )
+
+# ❷ OpenAPI 스펙과 로고 파일도 루트에서 바로 접근 가능하게
+@app.route("/openapi.json")
+def serve_openapi():
+    return send_from_directory(app.root_path, "static", "openapi.json", mimetype="application/json")
+
+@app.route("/logo.png")
+def serve_logo():
+    return send_from_directory(app.root_path, "static", "logo.png", mimetype="image/png")
+
+
 # 네이버 오픈 API 자격증명 (실제론 환경변수로 관리)
 NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID")
 NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
