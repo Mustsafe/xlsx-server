@@ -1,0 +1,16 @@
+{
+  "schema_version": "v1",
+  "name_for_human": "산업안전뉴스",
+  "name_for_model": "safety_news",
+  "description_for_human": "최신 산업 안전 뉴스를 가져와 포맷팅해줍니다",
+  "description_for_model": "엔드포인트를 호출해서 오늘 날짜 기준 최신 뉴스 3건을 템플릿으로 출력해주세요.",
+  "auth": { "type": "none" },
+  "api": {
+    "type": "openapi",
+    "url": "https://xlsx-server.onrender.com/openapi.json",
+    "is_user_authenticated": false
+  },
+  "logo_url": "https://xlsx-server.onrender.com/logo.png",
+  "contact_email": "support@yourdomain.com",
+  "legal_info_url": "https://yourdomain.com/legal"
+}
