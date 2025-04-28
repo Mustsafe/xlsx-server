@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, send_file, jsonify
 import pandas as pd
 import os
 import requests
@@ -7,12 +7,12 @@ from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
-# ✅ 데이터 디렉토리 설정
+# ✅ 수정된 부분: ./data 디렉토리 사용
 DATA_DIR = "./data"
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
-# ✅ 작업계획서 키워드 매핑
+# ✅ 기존 작업계획서 키워드 매핑 유지
 KEYWORD_ALIAS = {
     "고소작업 계획서": "고소작업대작업계획서", "고소 작업 계획서": "고소작업대작업계획서",
     "고소작업대 계획서": "고소작업대작업계획서", "고소작업": "고소작업대작업계획서",
@@ -36,7 +36,7 @@ KEYWORD_ALIAS = {
 }
 
 TEMPLATES = {name: {"columns": ["작업 항목", "작성 양식", "실무 예시"], "drop_columns": []} for name in KEYWORD_ALIAS.values()}
-SOURCES = {name: f"※ 본 양식은 {name} 관련 법령 또는 지침을 기반으로 작성되었습니다." for name in KEYWORD_ALIAS.values()}
+SOURCES = {name: f"※ 본 양식은 {name} 관련 법령 또는 지침을 기반으로 작성되어있습니다." for name in KEYWORD_ALIAS.values()}
 
 def resolve_keyword(raw_keyword: str) -> str:
     for alias, standard in KEYWORD_ALIAS.items():
@@ -44,40 +44,29 @@ def resolve_keyword(raw_keyword: str) -> str:
             return standard
     return raw_keyword
 
-# ✅ 작업계획서 생성 엔드포인트
-@app.route("/create_xlsx", methods=["GET"])
-def create_xlsx():
-    raw_template = request.args.get("template", "")
-    template_name = resolve_keyword(raw_template)
+def crawl_news_content(url, source):
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        res = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(res.text, "html.parser")
 
-    if not template_name or template_name not in TEMPLATES:
-        return {"error": f"'{raw_template}'(으)로는 양식을 찾을 수 없습니다."}, 400
+        if source == "네이버":
+            body = soup.select_one("#dic_area") or soup.select_one(".newsct_article")
+        elif source == "안전신문":
+            body = soup.select_one(".view-article") or soup.select_one(".article-view-content")
+        else:
+            body = None
 
-    csv_path = os.path.join(DATA_DIR, f"{template_name}.csv")
-    if not os.path.exists(csv_path):
-        return {"error": "CSV 원본 파일이 존재하지 않습니다."}, 404
+        if body:
+            return body.get_text(strip=True)
+        else:
+            return ""
+    except:
+        return ""
 
-    df = pd.read_csv(csv_path)
-    drop_cols = TEMPLATES[template_name].get("drop_columns", [])
-    df = df.drop(columns=[col for col in drop_cols if col in df.columns], errors="ignore")
-
-    final_cols = TEMPLATES[template_name]["columns"]
-    df = df[[col for col in final_cols if col in df.columns]]
-
-    if template_name in SOURCES:
-        source_text = SOURCES[template_name]
-        df.loc[len(df)] = [source_text] + [""] * (len(df.columns) - 1)
-
-    xlsx_path = os.path.join(DATA_DIR, f"{template_name}_최종양식.xlsx")
-    df.to_excel(xlsx_path, index=False)
-
-    return send_file(xlsx_path, as_attachment=True, download_name=f"{template_name}.xlsx")
-
-# ✅ 네이버 뉴스 크롤링
 def crawl_naver_news():
     base_url = "https://search.naver.com/search.naver"
     keywords = ["건설 사고", "건설 사망사고", "추락 사고", "끼임 사고", "질식 사고", "폭발 사고", "산업재해", "산업안전"]
-
     headers = {"User-Agent": "Mozilla/5.0"}
     collected = []
 
@@ -92,19 +81,20 @@ def crawl_naver_news():
             date_tag = item.select_one(".info_group span.date")
 
             if title_tag and title_tag.get("title") and title_tag.get("href"):
+                link = title_tag['href']
+                content = crawl_news_content(link, "네이버")
                 collected.append({
                     "출처": "네이버",
                     "제목": title_tag["title"],
-                    "링크": title_tag["href"],
-                    "날짜": date_tag.text.strip() if date_tag else ""
+                    "링크": link,
+                    "날짜": date_tag.text.strip() if date_tag else "",
+                    "본문": content
                 })
     return collected
 
-# ✅ 안전신문 크롤링
 def crawl_safetynews():
     base_url = "https://www.safetynews.co.kr"
     keywords = ["건설 사고", "건설 사망사고", "추락 사고", "끼임 사고", "질식 사고", "폭발 사고", "산업재해", "산업안전"]
-
     headers = {"User-Agent": "Mozilla/5.0"}
     collected = []
 
@@ -122,16 +112,17 @@ def crawl_safetynews():
                 title = title_element.text.strip()
                 link = base_url + title_element.get("href")
                 date = date_element.text.strip() if date_element else ""
+                content = crawl_news_content(link, "안전신문")
 
                 collected.append({
                     "출처": "안전신문",
                     "제목": title,
                     "링크": link,
-                    "날짜": date
+                    "날짜": date,
+                    "본문": content
                 })
     return collected
 
-# ✅ 통합 뉴스 JSON 반환
 @app.route("/daily_news", methods=["GET"])
 def get_daily_news():
     try:
@@ -153,13 +144,12 @@ def get_daily_news():
                 continue
 
         if not filtered_news:
-            return jsonify({"error": "최근 7일 내 가져올 수 있는 뉴스가 없습니다."}), 200
+            return {"error": "최근 7일 내 가져올 수 있는 뉴스가 없습니다."}, 200
 
-        return jsonify({"news": filtered_news}), 200
+        return jsonify(filtered_news)
 
     except Exception as e:
-        return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
+        return {"error": f"Internal Server Error: {str(e)}"}, 500
 
-# ✅ 서버 실행
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
