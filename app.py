@@ -79,7 +79,7 @@ def crawl_naver_news():
     headers = {"User-Agent": "Mozilla/5.0"}
     results = []
 
-    three_days_ago = datetime.now() - timedelta(days=3)
+    three_days_ago = datetime.now() - timedelta(days=7)
 
     for keyword in SEARCH_KEYWORDS:
         url = f"https://search.naver.com/search.naver?where=news&query={keyword}"
