@@ -2,16 +2,17 @@ from flask import Flask, request, send_file, jsonify
 import pandas as pd
 import os
 import requests
-from datetime import datetime
+from bs4 import BeautifulSoup
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
-# ✅ 디렉토리 생성 보장
+# ✅ '/mnt/data' 디렉토리 없으면 생성
 DATA_DIR = "/mnt/data"
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
-# ✅ 기존 작업계획서 코드 유지
+# ✅ 기존 작업계획서 키워드 매핑 유지
 KEYWORD_ALIAS = {
     "고소작업 계획서": "고소작업대작업계획서", "고소 작업 계획서": "고소작업대작업계획서",
     "고소작업대 계획서": "고소작업대작업계획서", "고소작업": "고소작업대작업계획서",
@@ -43,7 +44,7 @@ def resolve_keyword(raw_keyword: str) -> str:
             return standard
     return raw_keyword
 
-# ✅ 기존 작업계획서 엔드포인트
+# ✅ 작업계획서 xlsx 생성 엔드포인트
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
     raw_template = request.args.get("template", "")
@@ -72,53 +73,91 @@ def create_xlsx():
 
     return send_file(xlsx_path, as_attachment=True, download_name=f"{template_name}.xlsx")
 
-# ✅ 네이버 뉴스 OpenAPI
-NAVER_CLIENT_ID = "QK5pGnOogpbtXc2_AQAQ"
-NAVER_CLIENT_SECRET = "xjH5Nn5auL"
+# ✅ 네이버 뉴스 크롤링 (8개 키워드)
+def crawl_naver_news():
+    base_url = "https://search.naver.com/search.naver"
+    keywords = ["건설 사고", "건설 사망사고", "추락 사고", "끼임 사고", "질식 사고", "폭발 사고", "산업재해", "산업안전"]
 
-SEARCH_KEYWORDS = [
-    "건설 사고", "건설 사망사고", "추락 사고",
-    "작업 사고", "안전 사고", "중대재해",
-    "산업재해", "산업 안전 사고"
-]
+    headers = {"User-Agent": "Mozilla/5.0"}
+    collected = []
 
-def crawl_naver_api_news():
-    headers = {
-        "X-Naver-Client-Id": NAVER_CLIENT_ID,
-        "X-Naver-Client-Secret": NAVER_CLIENT_SECRET
-    }
-    all_results = []
+    for keyword in keywords:
+        params = {"where": "news", "query": keyword}
+        response = requests.get(base_url, params=params, headers=headers, timeout=10)
+        soup = BeautifulSoup(response.text, "html.parser")
+        news_items = soup.select(".list_news > li")
 
-    for keyword in SEARCH_KEYWORDS:
-        url = "https://openapi.naver.com/v1/search/news.json"
-        params = {
-            "query": keyword,
-            "display": 10,
-            "sort": "date"  # 최신순
-        }
-        response = requests.get(url, headers=headers, params=params)
-        if response.status_code == 200:
-            data = response.json()
-            for item in data.get("items", []):
-                all_results.append({
+        for item in news_items:
+            title_tag = item.select_one(".news_tit")
+            date_tag = item.select_one(".info_group span.date")
+
+            if title_tag and title_tag.get("title") and title_tag.get("href"):
+                collected.append({
                     "출처": "네이버",
-                    "제목": item["title"].replace("<b>", "").replace("</b>", ""),
-                    "링크": item["link"],
-                    "날짜": item["pubDate"]
+                    "제목": title_tag["title"],
+                    "링크": title_tag["href"],
+                    "날짜": date_tag.text.strip() if date_tag else ""
                 })
-    return all_results
+    return collected
 
-# ✅ /daily_news API
+# ✅ 안전신문 크롤링 (8개 키워드)
+def crawl_safetynews():
+    base_url = "https://www.safetynews.co.kr"
+    keywords = ["건설 사고", "건설 사망사고", "추락 사고", "끼임 사고", "질식 사고", "폭발 사고", "산업재해", "산업안전"]
+
+    headers = {"User-Agent": "Mozilla/5.0"}
+    collected = []
+
+    for keyword in keywords:
+        search_url = f"{base_url}/search/news?searchword={keyword}"
+        response = requests.get(search_url, headers=headers, timeout=10)
+        soup = BeautifulSoup(response.text, "html.parser")
+        news_items = soup.select(".article-list-content")
+
+        for item in news_items:
+            title_element = item.select_one(".list-titles")
+            date_element = item.select_one(".list-dated")
+
+            if title_element:
+                title = title_element.text.strip()
+                link = base_url + title_element.get("href")
+                date = date_element.text.strip() if date_element else ""
+
+                collected.append({
+                    "출처": "안전신문",
+                    "제목": title,
+                    "링크": link,
+                    "날짜": date
+                })
+    return collected
+
+# ✅ 통합 뉴스 크롤링 엔드포인트
 @app.route("/daily_news", methods=["GET"])
 def get_daily_news():
     try:
-        naver_news = crawl_naver_api_news()
+        naver_news = crawl_naver_news()
+        safety_news = crawl_safetynews()
 
-        if not naver_news:
-            return {"error": "오늘 가져올 수 있는 뉴스가 없습니다."}, 404
+        all_news = naver_news + safety_news
 
-        df = pd.DataFrame(naver_news)
-        filename = os.path.join(DATA_DIR, f"daily_safety_news_{datetime.now().strftime('%Y%m%d')}.csv")
+        # 오늘 ~ 7일 이내만 필터
+        today = datetime.now()
+        one_week_ago = today - timedelta(days=7)
+
+        filtered_news = []
+        for news in all_news:
+            try:
+                date = datetime.strptime(news["날짜"], "%Y.%m.%d.")
+                if one_week_ago <= date <= today:
+                    filtered_news.append(news)
+            except:
+                continue
+
+        if not filtered_news:
+            return {"error": "최근 7일 내 가져올 수 있는 뉴스가 없습니다."}, 200
+
+        df = pd.DataFrame(filtered_news)
+        filename = os.path.join(DATA_DIR, f"daily_safety_news_{today.strftime('%Y%m%d')}.csv")
         df.to_csv(filename, index=False, encoding="utf-8-sig")
 
         return send_file(filename, as_attachment=True)
@@ -126,5 +165,6 @@ def get_daily_news():
     except Exception as e:
         return {"error": f"Internal Server Error: {str(e)}"}, 500
 
+# ✅ 서버 실행
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
