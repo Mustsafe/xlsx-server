@@ -39,9 +39,7 @@ import os
 @app.route("/openapi.json")
 def serve_openapi():
     return send_from_directory(
-        # directory 인자: 실제 파일이 있는 디렉토리 경로
         os.path.join(app.root_path, "static"),
-        # filename 인자: 그 디렉토리 안의 파일 이름
         "openapi.json",
         mimetype="application/json"
     )
