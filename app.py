@@ -7,17 +7,12 @@ from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
-# ✅ '/mnt/data' 디렉토리 없으면 생성
-DATA_DIR = "/mnt/data"
+# ✅ 수정된 부분: ./data 디렉토리 사용
+DATA_DIR = "./data"
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
-# ✅ 헬스체크용 루트 엔드포인트 추가
-@app.route("/", methods=["GET"])
-def home():
-    return "Server is running!", 200
-
-# ✅ 기존 작업계획서 키워드 매핑
+# ✅ 기존 작업계획서 키워드 매핑 유지
 KEYWORD_ALIAS = {
     "고소작업 계획서": "고소작업대작업계획서", "고소 작업 계획서": "고소작업대작업계획서",
     "고소작업대 계획서": "고소작업대작업계획서", "고소작업": "고소작업대작업계획서",
@@ -49,7 +44,7 @@ def resolve_keyword(raw_keyword: str) -> str:
             return standard
     return raw_keyword
 
-# ✅ 작업계획서 생성 API
+# ✅ 작업계획서 xlsx 생성 엔드포인트
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
     raw_template = request.args.get("template", "")
@@ -79,6 +74,7 @@ def create_xlsx():
     return send_file(xlsx_path, as_attachment=True, download_name=f"{template_name}.xlsx")
 
 # ✅ 네이버 뉴스 크롤링
+
 def crawl_naver_news():
     base_url = "https://search.naver.com/search.naver"
     keywords = ["건설 사고", "건설 사망사고", "추락 사고", "끼임 사고", "질식 사고", "폭발 사고", "산업재해", "산업안전"]
@@ -105,7 +101,8 @@ def crawl_naver_news():
                 })
     return collected
 
-# ✅ 안전신문 뉴스 크롤링
+# ✅ 안전신문 크롤링
+
 def crawl_safetynews():
     base_url = "https://www.safetynews.co.kr"
     keywords = ["건설 사고", "건설 사망사고", "추락 사고", "끼임 사고", "질식 사고", "폭발 사고", "산업재해", "산업안전"]
@@ -136,7 +133,8 @@ def crawl_safetynews():
                 })
     return collected
 
-# ✅ 통합 뉴스 크롤링 엔드포인트
+# ✅ 통합 뉴스 엔드포인트
+
 @app.route("/daily_news", methods=["GET"])
 def get_daily_news():
     try:
@@ -170,5 +168,6 @@ def get_daily_news():
         return {"error": f"Internal Server Error: {str(e)}"}, 500
 
 # ✅ 서버 실행
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
