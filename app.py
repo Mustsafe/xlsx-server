@@ -3,7 +3,6 @@ import pandas as pd
 import os
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime, timedelta
 import time
 
 app = Flask(__name__)
@@ -36,81 +35,7 @@ KEYWORD_ALIAS = {
     "고압가스 작업 계획서": "고압가스작업계획서", "고압가스 계획서": "고압가스작업계획서"
 }
 
-TEMPLATES = {name: {"columns": ["작업 항목", "작성 양식", "실무 예시"], "drop_columns": []} for name in KEYWORD_ALIAS.values()}
-SOURCES = {name: f"※ 본 양식은 {name} 관련 법령 또는 지침을 기반으로 작성되었습니다." for name in KEYWORD_ALIAS.values()}
-
-def resolve_keyword(raw_keyword: str) -> str:
-    for alias, standard in KEYWORD_ALIAS.items():
-        if alias in raw_keyword:
-            return standard
-    return raw_keyword
-
-# ✅ 작업계획서 xlsx 생성 엔드포인트
-@app.route("/create_xlsx", methods=["GET"])
-def create_xlsx():
-    raw_template = request.args.get("template", "")
-    template_name = resolve_keyword(raw_template)
-
-    if not template_name or template_name not in TEMPLATES:
-        return {"error": f"'{raw_template}'(으)로는 양식을 찾을 수 없습니다."}, 400
-
-    csv_path = os.path.join(DATA_DIR, f"{template_name}.csv")
-    if not os.path.exists(csv_path):
-        return {"error": "CSV 원본 파일이 존재하지 않습니다."}, 404
-
-    df = pd.read_csv(csv_path)
-    drop_cols = TEMPLATES[template_name].get("drop_columns", [])
-    df = df.drop(columns=[col for col in drop_cols if col in df.columns], errors="ignore")
-
-    final_cols = TEMPLATES[template_name]["columns"]
-    df = df[[col for col in final_cols if col in df.columns]]
-
-    if template_name in SOURCES:
-        source_text = SOURCES[template_name]
-        df.loc[len(df)] = [source_text] + ["" for _ in range(len(df.columns) - 1)]
-
-    xlsx_path = os.path.join(DATA_DIR, f"{template_name}_최종양식.xlsx")
-    df.to_excel(xlsx_path, index=False)
-
-    return send_file(xlsx_path, as_attachment=True, download_name=f"{template_name}.xlsx")
-
-# ✅ 본문 수집 함수
-def fetch_naver_article_content(url):
-    try:
-        headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(response.text, "html.parser")
-
-        content = ""
-        if soup.select_one("div#dic_area"):
-            content = soup.select_one("div#dic_area").get_text(separator="\n").strip()
-        elif soup.select_one("article"):
-            content = soup.select_one("article").get_text(separator="\n").strip()
-        else:
-            content = "(본문 수집 실패)"
-
-        return content
-    except Exception as e:
-        print(f"Error fetching Naver article: {e}")  # 에러 로그
-        return "(본문 수집 실패)"
-
-def fetch_safetynews_article_content(url):
-    try:
-        headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(response.text, "html.parser")
-
-        if soup.select_one("div#article-view-content-div"):
-            content = soup.select_one("div#article-view-content-div").get_text(separator="\n").strip()
-        else:
-            content = "(본문 수집 실패)"
-
-        return content
-    except Exception as e:
-        print(f"Error fetching Safetynews article: {e}")  # 에러 로그
-        return "(본문 수집 실패)"
-
-# ✅ 뉴스 크롤링 함수 (본문 포함, 2개 제한)
+# 뉴스 크롤링 함수
 def crawl_naver_news():
     base_url = "https://search.naver.com/search.naver"
     keywords = ["건설 사고", "건설 사망사고", "추락 사고", "끼임 사고", "질식 사고", "폭발 사고", "산업재해", "산업안전"]
