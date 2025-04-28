@@ -7,12 +7,12 @@ from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
-# ✅ 데이터 저장 디렉토리
+# ✅ 수정된 부분: ./data 디렉토리 사용
 DATA_DIR = "./data"
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
-# ✅ 키워드 매핑
+# ✅ 기존 작업계획서 키워드 매핑 유지
 KEYWORD_ALIAS = {
     "고소작업 계획서": "고소작업대작업계획서", "고소 작업 계획서": "고소작업대작업계획서",
     "고소작업대 계획서": "고소작업대작업계획서", "고소작업": "고소작업대작업계획서",
@@ -38,25 +38,13 @@ KEYWORD_ALIAS = {
 TEMPLATES = {name: {"columns": ["작업 항목", "작성 양식", "실무 예시"], "drop_columns": []} for name in KEYWORD_ALIAS.values()}
 SOURCES = {name: f"※ 본 양식은 {name} 관련 법령 또는 지침을 기반으로 작성되었습니다." for name in KEYWORD_ALIAS.values()}
 
-# ✅ 날짜 파싱
+def resolve_keyword(raw_keyword: str) -> str:
+    for alias, standard in KEYWORD_ALIAS.items():
+        if alias in raw_keyword:
+            return standard
+    return raw_keyword
 
-def parse_date(text):
-    today = datetime.now()
-    text = text.strip()
-
-    if "시간 전" in text:
-        return today
-    elif "일 전" in text:
-        days_ago = int(text.replace("일 전", "").strip())
-        return today - timedelta(days=days_ago)
-    else:
-        try:
-            return datetime.strptime(text, "%Y.%m.%d.")
-        except:
-            return None
-
-# ✅ 작업계획서 xlsx 생성
-
+# ✅ 작업계획서 xlsx 생성 엔드포인트
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
     raw_template = request.args.get("template", "")
@@ -85,12 +73,10 @@ def create_xlsx():
 
     return send_file(xlsx_path, as_attachment=True, download_name=f"{template_name}.xlsx")
 
-# ✅ 네이버 뉴스 크롤링
-
+# ✅ 네이버 뉴스 크롤링 (본문 추가, 2개 제한)
 def crawl_naver_news():
     base_url = "https://search.naver.com/search.naver"
     keywords = ["건설 사고", "건설 사망사고", "추락 사고", "끼임 사고", "질식 사고", "폭발 사고", "산업재해", "산업안전"]
-
     headers = {"User-Agent": "Mozilla/5.0"}
     collected = []
 
@@ -98,29 +84,31 @@ def crawl_naver_news():
         params = {"where": "news", "query": keyword}
         response = requests.get(base_url, params=params, headers=headers, timeout=10)
         soup = BeautifulSoup(response.text, "html.parser")
-        news_items = soup.select(".list_news > li")
+        news_items = soup.select(".list_news > li")[:2]
 
         for item in news_items:
             title_tag = item.select_one(".news_tit")
             date_tag = item.select_one(".info_group span.date")
-            content_tag = item.select_one(".dsc_txt_wrap")
 
-            if title_tag and title_tag.get("title") and title_tag.get("href"):
+            if title_tag and title_tag.get("href"):
+                article_url = title_tag.get("href")
+                article_res = requests.get(article_url, headers=headers, timeout=10)
+                article_soup = BeautifulSoup(article_res.text, "html.parser")
+                article_content = article_soup.get_text(" ", strip=True)
+
                 collected.append({
                     "출처": "네이버",
                     "제목": title_tag["title"],
-                    "링크": title_tag["href"],
-                    "본문": content_tag.text.strip() if content_tag else "",
-                    "날짜": date_tag.text.strip() if date_tag else ""
+                    "링크": article_url,
+                    "날짜": date_tag.text.strip() if date_tag else "",
+                    "본문": article_content[:500]
                 })
     return collected
 
-# ✅ 안전신문 크롤링
-
+# ✅ 안전신문 뉴스 크롤링 (본문 추가, 2개 제한)
 def crawl_safetynews():
     base_url = "https://www.safetynews.co.kr"
     keywords = ["건설 사고", "건설 사망사고", "추락 사고", "끼임 사고", "질식 사고", "폭발 사고", "산업재해", "산업안전"]
-
     headers = {"User-Agent": "Mozilla/5.0"}
     collected = []
 
@@ -128,30 +116,28 @@ def crawl_safetynews():
         search_url = f"{base_url}/search/news?searchword={keyword}"
         response = requests.get(search_url, headers=headers, timeout=10)
         soup = BeautifulSoup(response.text, "html.parser")
-        news_items = soup.select(".article-list-content")
+        news_items = soup.select(".article-list-content")[:2]
 
         for item in news_items:
             title_element = item.select_one(".list-titles")
             date_element = item.select_one(".list-dated")
-            content_element = item.select_one(".list-subject")
 
-            if title_element:
-                title = title_element.text.strip()
-                link = base_url + title_element.get("href")
-                content = content_element.text.strip() if content_element else ""
-                date = date_element.text.strip() if date_element else ""
+            if title_element and title_element.get("href"):
+                article_url = base_url + title_element.get("href")
+                article_res = requests.get(article_url, headers=headers, timeout=10)
+                article_soup = BeautifulSoup(article_res.text, "html.parser")
+                article_content = article_soup.get_text(" ", strip=True)
 
                 collected.append({
                     "출처": "안전신문",
-                    "제목": title,
-                    "링크": link,
-                    "본문": content,
-                    "날짜": date
+                    "제목": title_element.text.strip(),
+                    "링크": article_url,
+                    "날짜": date_element.text.strip() if date_element else "",
+                    "본문": article_content[:500]
                 })
     return collected
 
-# ✅ 통합 뉴스 JSON 반환
-
+# ✅ 통합 뉴스 크롤링 엔드포인트 (json 반환)
 @app.route("/daily_news", methods=["GET"])
 def get_daily_news():
     try:
@@ -165,9 +151,12 @@ def get_daily_news():
 
         filtered_news = []
         for news in all_news:
-            parsed_date = parse_date(news["날짜"])
-            if parsed_date and one_week_ago <= parsed_date <= today:
-                filtered_news.append(news)
+            try:
+                date = datetime.strptime(news["날짜"], "%Y.%m.%d.")
+                if one_week_ago <= date <= today:
+                    filtered_news.append(news)
+            except:
+                continue
 
         if not filtered_news:
             return {"error": "최근 7일 내 가져올 수 있는 뉴스가 없습니다."}, 200
@@ -178,6 +167,5 @@ def get_daily_news():
         return {"error": f"Internal Server Error: {str(e)}"}, 500
 
 # ✅ 서버 실행
-
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
