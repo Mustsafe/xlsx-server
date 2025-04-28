@@ -12,7 +12,7 @@ DATA_DIR = "./data"
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
-# ✅ 기존 작업계획서 키워드 매핑 유지
+# ✅ 작업계획서 키워드 매핑
 KEYWORD_ALIAS = {
     "고소작업 계획서": "고소작업대작업계획서", "고소 작업 계획서": "고소작업대작업계획서",
     "고소작업대 계획서": "고소작업대작업계획서", "고소작업": "고소작업대작업계획서",
@@ -137,7 +137,7 @@ def crawl_naver_news():
                 "출처": "네이버",
                 "제목": title_tag["title"] if title_tag else "",
                 "링크": link,
-                "날짜": date_tag.text.strip() if date_tag else "날짜 정보 없음",
+                "날짜": date_tag.text.strip() if date_tag else "",
                 "본문": content[:1000]
             })
     return collected
@@ -170,7 +170,7 @@ def crawl_safetynews():
                 "출처": "안전신문",
                 "제목": title_element.text.strip() if title_element else "",
                 "링크": link,
-                "날짜": date_element.text.strip() if date_element else "날짜 정보 없음",
+                "날짜": date_element.text.strip() if date_element else "",
                 "본문": content[:1000]
             })
     return collected
