@@ -6,6 +6,11 @@ from datetime import datetime
 
 app = Flask(__name__)
 
+# ✅ 디렉토리 생성 보장
+DATA_DIR = "/mnt/data"
+if not os.path.exists(DATA_DIR):
+    os.makedirs(DATA_DIR)
+
 # ✅ 기존 작업계획서 코드 유지
 KEYWORD_ALIAS = {
     "고소작업 계획서": "고소작업대작업계획서", "고소 작업 계획서": "고소작업대작업계획서",
@@ -38,7 +43,7 @@ def resolve_keyword(raw_keyword: str) -> str:
             return standard
     return raw_keyword
 
-# ✅ 기존 작업계획서 엔드포인트 유지
+# ✅ 기존 작업계획서 엔드포인트
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
     raw_template = request.args.get("template", "")
@@ -47,7 +52,7 @@ def create_xlsx():
     if not template_name or template_name not in TEMPLATES:
         return {"error": f"'{raw_template}'(으)로는 양식을 찾을 수 없습니다."}, 400
 
-    csv_path = f"/mnt/data/{template_name}.csv"
+    csv_path = os.path.join(DATA_DIR, f"{template_name}.csv")
     if not os.path.exists(csv_path):
         return {"error": "CSV 원본 파일이 존재하지 않습니다."}, 404
 
@@ -62,16 +67,15 @@ def create_xlsx():
         source_text = SOURCES[template_name]
         df.loc[len(df)] = [source_text] + [""] * (len(df.columns) - 1)
 
-    xlsx_path = f"/mnt/data/{template_name}_최종양식.xlsx"
+    xlsx_path = os.path.join(DATA_DIR, f"{template_name}_최종양식.xlsx")
     df.to_excel(xlsx_path, index=False)
 
     return send_file(xlsx_path, as_attachment=True, download_name=f"{template_name}.xlsx")
 
-# ✅ 네이버 뉴스 OpenAPI로 변경
+# ✅ 네이버 뉴스 OpenAPI
 NAVER_CLIENT_ID = "QK5pGnOogpbtXc2_AQAQ"
 NAVER_CLIENT_SECRET = "xjH5Nn5auL"
 
-# 검색 키워드 리스트
 SEARCH_KEYWORDS = [
     "건설 사고", "건설 사망사고", "추락 사고",
     "작업 사고", "안전 사고", "중대재해",
@@ -90,7 +94,7 @@ def crawl_naver_api_news():
         params = {
             "query": keyword,
             "display": 10,
-            "sort": "date"  # 최신순 정렬
+            "sort": "date"  # 최신순
         }
         response = requests.get(url, headers=headers, params=params)
         if response.status_code == 200:
@@ -104,7 +108,7 @@ def crawl_naver_api_news():
                 })
     return all_results
 
-# ✅ 통합된 /daily_news API
+# ✅ /daily_news API
 @app.route("/daily_news", methods=["GET"])
 def get_daily_news():
     try:
@@ -114,7 +118,7 @@ def get_daily_news():
             return {"error": "오늘 가져올 수 있는 뉴스가 없습니다."}, 404
 
         df = pd.DataFrame(naver_news)
-        filename = f"/mnt/data/daily_safety_news_{datetime.now().strftime('%Y%m%d')}.csv"
+        filename = os.path.join(DATA_DIR, f"daily_safety_news_{datetime.now().strftime('%Y%m%d')}.csv")
         df.to_csv(filename, index=False, encoding="utf-8-sig")
 
         return send_file(filename, as_attachment=True)
