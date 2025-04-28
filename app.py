@@ -2,8 +2,7 @@ from flask import Flask, request, send_file, jsonify
 import pandas as pd
 import os
 import requests
-from bs4 import BeautifulSoup
-from datetime import datetime, timedelta
+from datetime import datetime
 
 app = Flask(__name__)
 
@@ -68,96 +67,53 @@ def create_xlsx():
 
     return send_file(xlsx_path, as_attachment=True, download_name=f"{template_name}.xlsx")
 
-# ✅ 네이버 + 안전신문 통합 뉴스 크롤러 (딥 크롤링 추가)
+# ✅ 네이버 뉴스 OpenAPI로 변경
+NAVER_CLIENT_ID = "QK5pGnOogpbtXc2_AQAQ"
+NAVER_CLIENT_SECRET = "xjH5Nn5auL"
+
+# 검색 키워드 리스트
 SEARCH_KEYWORDS = [
     "건설 사고", "건설 사망사고", "추락 사고",
-    "산업 재해", "중대재해", "밀폐공간 사고",
-    "크레인 사고", "화재 사고"
+    "작업 사고", "안전 사고", "중대재해",
+    "산업재해", "산업 안전 사고"
 ]
 
-def crawl_naver_news():
-    headers = {"User-Agent": "Mozilla/5.0"}
-    results = []
-
-    three_days_ago = datetime.now() - timedelta(days=7)
+def crawl_naver_api_news():
+    headers = {
+        "X-Naver-Client-Id": NAVER_CLIENT_ID,
+        "X-Naver-Client-Secret": NAVER_CLIENT_SECRET
+    }
+    all_results = []
 
     for keyword in SEARCH_KEYWORDS:
-        url = f"https://search.naver.com/search.naver?where=news&query={keyword}"
-        response = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(response.text, "html.parser")
-        news_items = soup.select(".list_news > li")
-
-        for item in news_items:
-            title_tag = item.select_one(".news_tit")
-            date_tag = item.select_one(".info_group span.date")
-
-            if title_tag and title_tag.get("title") and title_tag.get("href"):
-                title = title_tag["title"]
-                link = title_tag["href"]
-                date_text = date_tag.text.strip() if date_tag else ""
-
-                # 날짜 체크 (n일 전, 시간 전 → 필터링)
-                if "전" in date_text:
-                    news_date = datetime.now()
-                else:
-                    try:
-                        news_date = datetime.strptime(date_text, "%Y.%m.%d.")
-                    except:
-                        news_date = datetime.now()
-
-                if news_date >= three_days_ago:
-                    results.append({
-                        "출처": "네이버",
-                        "키워드": keyword,
-                        "제목": title,
-                        "링크": link,
-                        "날짜": news_date.strftime("%Y-%m-%d")
-                    })
-
-    return results
-
-def crawl_safetynews():
-    url = "https://www.safetynews.co.kr/news/articleList.html?sc_sub_section_code=S2N2"
-    response = requests.get(url)
-    soup = BeautifulSoup(response.text, "html.parser")
-    news_items = soup.select(".article-list-content")
-
-    results = []
-    three_days_ago = datetime.now() - timedelta(days=3)
-
-    for item in news_items:
-        title_element = item.select_one(".list-titles")
-        date_element = item.select_one(".list-dated")
-
-        if title_element and date_element:
-            title = title_element.text.strip()
-            link = "https://www.safetynews.co.kr" + title_element.get("href")
-            try:
-                news_date = datetime.strptime(date_element.text.strip(), "%Y-%m-%d")
-            except:
-                news_date = datetime.now()
-
-            if news_date >= three_days_ago:
-                results.append({
-                    "출처": "안전신문",
-                    "제목": title,
-                    "링크": link,
-                    "날짜": news_date.strftime("%Y-%m-%d")
+        url = "https://openapi.naver.com/v1/search/news.json"
+        params = {
+            "query": keyword,
+            "display": 10,
+            "sort": "date"  # 최신순 정렬
+        }
+        response = requests.get(url, headers=headers, params=params)
+        if response.status_code == 200:
+            data = response.json()
+            for item in data.get("items", []):
+                all_results.append({
+                    "출처": "네이버",
+                    "제목": item["title"].replace("<b>", "").replace("</b>", ""),
+                    "링크": item["link"],
+                    "날짜": item["pubDate"]
                 })
-    return results
+    return all_results
 
 # ✅ 통합된 /daily_news API
 @app.route("/daily_news", methods=["GET"])
 def get_daily_news():
     try:
-        naver_news = crawl_naver_news()
-        safety_news = crawl_safetynews()
+        naver_news = crawl_naver_api_news()
 
-        all_news = naver_news + safety_news
-        if not all_news:
-            return {"error": "오늘 가져올 수 있는 뉴스가 없습니다."}, 500
+        if not naver_news:
+            return {"error": "오늘 가져올 수 있는 뉴스가 없습니다."}, 404
 
-        df = pd.DataFrame(all_news)
+        df = pd.DataFrame(naver_news)
         filename = f"/mnt/data/daily_safety_news_{datetime.now().strftime('%Y%m%d')}.csv"
         df.to_csv(filename, index=False, encoding="utf-8-sig")
 
