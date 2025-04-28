@@ -74,7 +74,6 @@ def create_xlsx():
     return send_file(xlsx_path, as_attachment=True, download_name=f"{template_name}.xlsx")
 
 # ✅ 본문 수집 함수
-
 def fetch_naver_article_content(url):
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -90,7 +89,8 @@ def fetch_naver_article_content(url):
             content = "(본문 수집 실패)"
 
         return content
-    except:
+    except Exception as e:
+        print(f"Error fetching Naver article: {e}")  # 에러 로그
         return "(본문 수집 실패)"
 
 def fetch_safetynews_article_content(url):
@@ -105,7 +105,8 @@ def fetch_safetynews_article_content(url):
             content = "(본문 수집 실패)"
 
         return content
-    except:
+    except Exception as e:
+        print(f"Error fetching Safetynews article: {e}")  # 에러 로그
         return "(본문 수집 실패)"
 
 # ✅ 뉴스 크롤링 함수 (본문 포함, 2개 제한)
@@ -115,27 +116,32 @@ def crawl_naver_news():
 
     headers = {"User-Agent": "Mozilla/5.0"}
     collected = []
-
+    
     for keyword in keywords:
         params = {"where": "news", "query": keyword}
         response = requests.get(base_url, params=params, headers=headers, timeout=10)
+        print(f"Fetched URL: {base_url} - Status Code: {response.status_code}")  # 상태 코드 로그
+        if response.status_code != 200:
+            continue
         soup = BeautifulSoup(response.text, "html.parser")
         news_items = soup.select(".list_news > li")[:2]  # 키워드당 2개 제한
 
         for item in news_items:
             title_tag = item.select_one(".news_tit")
             link = title_tag.get("href") if title_tag else None
+            date_tag = item.select_one(".info_group span.date")
             content = ""
             if link:
                 article_res = requests.get(link, headers=headers, timeout=10)
                 article_soup = BeautifulSoup(article_res.text, "html.parser")
                 paragraphs = article_soup.select("p")
                 content = " ".join([p.text.strip() for p in paragraphs if p.text.strip()])
-
+            print(f"Title: {title_tag['title']} | Link: {link} | Date: {date_tag.text.strip() if date_tag else ''}")  # 뉴스 항목 로그
             collected.append({
                 "출처": "네이버",
                 "제목": title_tag["title"] if title_tag else "",
                 "링크": link,
+                "날짜": date_tag.text.strip() if date_tag else "",
                 "본문": content[:1000]
             })
     return collected
@@ -150,23 +156,28 @@ def crawl_safetynews():
     for keyword in keywords:
         search_url = f"{base_url}/search/news?searchword={keyword}"
         response = requests.get(search_url, headers=headers, timeout=10)
+        print(f"Fetched URL: {search_url} - Status Code: {response.status_code}")  # 상태 코드 로그
+        if response.status_code != 200:
+            continue
         soup = BeautifulSoup(response.text, "html.parser")
         news_items = soup.select(".article-list-content")[:2]
 
         for item in news_items:
             title_element = item.select_one(".list-titles")
             link = base_url + title_element.get("href") if title_element else None
+            date_element = item.select_one(".list-dated")
             content = ""
             if link:
                 article_res = requests.get(link, headers=headers, timeout=10)
                 article_soup = BeautifulSoup(article_res.text, "html.parser")
                 paragraphs = article_soup.select("p")
                 content = " ".join([p.text.strip() for p in paragraphs if p.text.strip()])
-
+            print(f"Title: {title_element.text.strip()} | Link: {link} | Date: {date_element.text.strip() if date_element else ''}")  # 뉴스 항목 로그
             collected.append({
                 "출처": "안전신문",
                 "제목": title_element.text.strip() if title_element else "",
                 "링크": link,
+                "날짜": date_element.text.strip() if date_element else "",
                 "본문": content[:1000]
             })
     return collected
@@ -183,9 +194,11 @@ def get_daily_news():
         if not all_news:
             return {"error": "최근 7일 내 가져올 수 있는 뉴스가 없습니다."}, 200
 
+        print(f"All News Collected: {len(all_news)} items")  # 전체 뉴스 수 출력
         return jsonify(all_news)
 
     except Exception as e:
+        print(f"Error: {str(e)}")  # 오류 로그
         return {"error": f"Internal Server Error: {str(e)}"}, 500
 
 # ✅ 서버 실행
