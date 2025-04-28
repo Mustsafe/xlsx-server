@@ -3,8 +3,8 @@ import pandas as pd
 import os
 import requests
 from bs4 import BeautifulSoup
-import time  # time 모듈을 임포트
 from datetime import datetime, timedelta
+import time
 
 app = Flask(__name__)
 
@@ -170,6 +170,7 @@ def crawl_safetynews():
         response = requests.get(search_url, headers=headers, timeout=10)
         print(f"Fetched URL: {search_url} - Status Code: {response.status_code}")  # 상태 코드 로그
         if response.status_code != 200:
+            print(f"Failed to fetch news for {keyword}. Skipping.")  # 실패 로그
             continue
         soup = BeautifulSoup(response.text, "html.parser")
         news_items = soup.select(".article-list-content")[:2]
