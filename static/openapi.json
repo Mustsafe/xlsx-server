@@ -1,0 +1,60 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "산업안전뉴스 API",
+    "version": "1.0.0",
+    "description": "최신 산업 안전 뉴스를 수집하고 포맷팅합니다."
+  },
+  "servers": [
+    { "url": "https://xlsx-server.onrender.com" }
+  ],
+  "paths": {
+    "/daily_news": {
+      "get": {
+        "summary": "원본 뉴스 JSON 반환",
+        "responses": {
+          "200": {
+            "description": "뉴스 배열",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "출처": { "type": "string" },
+                      "제목": { "type": "string" },
+                      "링크": { "type": "string" },
+                      "날짜": { "type": "string" },
+                      "본문": { "type": "string" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/render_news": {
+      "get": {
+        "summary": "GPT 포맷팅 뉴스 반환",
+        "responses": {
+          "200": {
+            "description": "포맷팅된 뉴스 문자열",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "formatted_news": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
