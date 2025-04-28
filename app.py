@@ -7,12 +7,12 @@ from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
-# ✅ 수정된 부분: ./data 디렉토리 사용
+# ✅ ./data 디렉토리 사용
 DATA_DIR = "./data"
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
-# ✅ 기존 작업계획서 키워드 매핑 유지
+# ✅ 작업계획서 키워드 매핑
 KEYWORD_ALIAS = {
     "고소작업 계획서": "고소작업대작업계획서", "고소 작업 계획서": "고소작업대작업계획서",
     "고소작업대 계획서": "고소작업대작업계획서", "고소작업": "고소작업대작업계획서",
