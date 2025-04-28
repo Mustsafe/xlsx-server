@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
-# 📁 데이터 디렉토리 설정
+# 📂 데이터 디렉토리
 DATA_DIR = "./data"
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
@@ -35,7 +35,7 @@ KEYWORD_ALIAS = {
     "고압가스 작업 계획서": "고압가스작업계획서", "고압가스 계획서": "고압가스작업계획서"
 }
 
-# 📋 엑셀 템플릿 설정
+# 엑셀 템플릿 설정
 TEMPLATES = {
     name: {"columns": ["작업 항목", "작성 양식", "실무 예시"], "drop_columns": []}
     for name in KEYWORD_ALIAS.values()
@@ -51,114 +51,88 @@ def resolve_keyword(raw_keyword: str) -> str:
             return standard
     return raw_keyword
 
-# 🚀 작업계획서 XLSX 생성 엔드포인트
+# ▶️ 작업계획서 엑셀 생성
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
-    raw_template = request.args.get("template", "")
-    template_name = resolve_keyword(raw_template)
+    raw = request.args.get("template", "")
+    tmpl = resolve_keyword(raw)
+    if tmpl not in TEMPLATES:
+        return {"error": f"'{raw}'로는 양식을 찾을 수 없습니다."}, 400
+    src = os.path.join(DATA_DIR, f"{tmpl}.csv")
+    if not os.path.exists(src):
+        return {"error": "CSV 파일 없음"}, 404
+    df = pd.read_csv(src)
+    drops = TEMPLATES[tmpl]["drop_columns"]
+    df = df.drop(columns=[c for c in drops if c in df.columns], errors="ignore")
+    cols = TEMPLATES[tmpl]["columns"]
+    df = df[[c for c in cols if c in df.columns]]
+    if tmpl in SOURCES:
+        df.loc[len(df)] = [SOURCES[tmpl]] + [""]*(len(df.columns)-1)
+    out = os.path.join(DATA_DIR, f"{tmpl}_final.xlsx")
+    df.to_excel(out, index=False)
+    return send_file(out, as_attachment=True, download_name=f"{tmpl}.xlsx")
 
-    if not template_name or template_name not in TEMPLATES:
-        return {"error": f"'{raw_template}'(으)로는 양식을 찾을 수 없습니다."}, 400
-
-    csv_path = os.path.join(DATA_DIR, f"{template_name}.csv")
-    if not os.path.exists(csv_path):
-        return {"error": "CSV 원본 파일이 존재하지 않습니다."}, 404
-
-    df = pd.read_csv(csv_path)
-    drop_cols = TEMPLATES[template_name].get("drop_columns", [])
-    df = df.drop(columns=[c for c in drop_cols if c in df.columns], errors="ignore")
-    final_cols = TEMPLATES[template_name]["columns"]
-    df = df[[c for c in final_cols if c in df.columns]]
-
-    # 출처 행 추가
-    source_text = SOURCES.get(template_name)
-    if source_text:
-        df.loc[len(df)] = [source_text] + ["" for _ in range(len(df.columns)-1)]
-
-    xlsx_path = os.path.join(DATA_DIR, f"{template_name}_최종양식.xlsx")
-    df.to_excel(xlsx_path, index=False)
-    return send_file(xlsx_path, as_attachment=True, download_name=f"{template_name}.xlsx")
-
-# 📖 본문 수집 유틸
+# ▶️ 본문 가져오기
  def fetch_naver_article_content(url):
     try:
-        headers = {"User-Agent": "Mozilla/5.0"}
-        resp = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(resp.text, "html.parser")
-        if soup.select_one("div#dic_area"):
-            return soup.select_one("div#dic_area").get_text(separator="\n").strip()
-        if soup.select_one("article"):
-            return soup.select_one("article").get_text(separator="\n").strip()
+        h = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(url, headers=h, timeout=10)
+        s = BeautifulSoup(r.text, "html.parser")
+        if s.select_one("div#dic_area"):
+            return s.select_one("div#dic_area").get_text(separator="\n").strip()
+        if s.select_one("article"):
+            return s.select_one("article").get_text(separator="\n").strip()
         return "(본문 수집 실패)"
     except:
         return "(본문 수집 실패)"
 
- def fetch_safetynews_article_content(url):
+def fetch_safetynews_article_content(url):
     try:
-        headers = {"User-Agent": "Mozilla/5.0"}
-        resp = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(resp.text, "html.parser")
-        if soup.select_one("div#article-view-content-div"):
-            return soup.select_one("div#article-view-content-div").get_text(separator="\n").strip()
-        return "(본문 수집 실패)"
+        h = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(url, headers=h, timeout=10)
+        s = BeautifulSoup(r.text, "html.parser")
+        div = s.select_one("div#article-view-content-div")
+        return div.get_text(separator="\n").strip() if div else "(본문 수집 실패)"
     except:
         return "(본문 수집 실패)"
 
-# 📰 네이버 뉴스 크롤러 (최신 2개)
- def crawl_naver_news():
-    base = "https://search.naver.com/search.naver"
-    keywords = ["건설 사고","건설 사망사고","추락 사고","끼임 사고","질식 사고","폭발 사고","산업재해","산업안전"]
-    collected = []
-    for kw in keywords:
-        params = {"where":"news","query":kw}
-        r = requests.get(base, params=params, headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
-        if r.status_code!=200: continue
-        soup = BeautifulSoup(r.text, "html.parser")
-        items = soup.select(".list_news > li")[:2]
-        for it in items:
-            t = it.select_one(".news_tit")
-            if not t or not t.get('href'): continue
-            link = t['href']; title=t.get('title','')
-            date_tag = it.select_one(".info_group span.date")
-            date_text = date_tag.text.strip() if date_tag else ''
-            body = fetch_naver_article_content(link)
-            collected.append({"출처":"네이버","제목":title,"링크":link,"날짜":date_text,"본문":body[:2000]})
-    return collected
-
-# 📰 안전신문 크롤러 (최신 2개)
- def crawl_safetynews():
-    base = "https://www.safetynews.co.kr"
-    keywords = ["건설 사고","건설 사망사고","추락 사고","끼임 사고","질식 사고","폭발 사고","산업재해","산업안전"]
-    collected = []
-    for kw in keywords:
-        url = f"{base}/search/news?searchword={kw}"
-        r = requests.get(url, headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
-        if r.status_code!=200: continue
-        soup = BeautifulSoup(r.text, "html.parser")
-        items = soup.select(".article-list-content")[:2]
-        for it in items:
-            title_el = it.select_one(".list-titles")
-            if not title_el or not title_el.get('href'): continue
-            link = base+title_el['href']; title=title_el.text.strip()
-            date_el = it.select_one(".list-dated")
-            date_text = date_el.text.strip() if date_el else ''
-            body = fetch_safetynews_article_content(link)
-            collected.append({"출처":"안전신문","제목":title,"링크":link,"날짜":date_text,"본문":body[:2000]})
-    return collected
-
-# 🌐 통합 뉴스 API
+# ▶️ 네이버 뉴스 크롤링
 @app.route("/daily_news", methods=["GET"])
 def get_daily_news():
     try:
-        naver = crawl_naver_news()
-        safety = crawl_safetynews()
-        all_news = naver + safety
-        if not all_news:
-            return {"error":"가져올 뉴스가 없습니다."}, 200
-        return jsonify(all_news)
+        def crawl_naver():
+            base = "https://search.naver.com/search.naver"
+            kws = ["건설 사고","산업안전"]
+            res = []
+            for kw in kws:
+                r = requests.get(base, params={"where":"news","query":kw}, headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
+                if r.status_code!=200: continue
+                soup = BeautifulSoup(r.text, "html.parser")
+                for li in soup.select(".list_news li")[:2]:
+                    t = li.select_one(".news_tit")
+                    if not t: continue
+                    url = t["href"]
+                    res.append({"출처":"네이버","제목":t.get("title",""),"링크":url,
+                                "본문":fetch_naver_article_content(url)})
+            return res
+        def crawl_safe():
+            base = "https://www.safetynews.co.kr"
+            res=[]
+            for kw in ["건설 사고","산업안전"]:
+                r = requests.get(f"{base}/search/news?searchword={kw}", headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
+                if r.status_code!=200: continue
+                soup=BeautifulSoup(r.text,"html.parser")
+                for it in soup.select(".article-list-content")[:2]:
+                    a=it.select_one(".list-titles")
+                    if not a: continue
+                    url=base+a.get("href")
+                    res.append({"출처":"안전신문","제목":a.text.strip(),"링크":url,
+                                "본문":fetch_safetynews_article_content(url)})
+            return res
+        data = crawl_naver()+crawl_safe()
+        return jsonify(data)
     except Exception as e:
-        return {"error":f"Internal Server Error: {str(e)}"}, 500
+        return {"error":str(e)},500
 
-# ▶️ 앱 실행
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
