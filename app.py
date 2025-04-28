@@ -3,19 +3,24 @@ import pandas as pd
 import os
 import requests
 from bs4 import BeautifulSoup
+import openai
 
 app = Flask(__name__)
+app.config['JSON_AS_ASCII'] = False  # 한글 깨짐 방지
+
+# 환경 변수에서 API 키 불러오기
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # ./data 디렉토리 사용
 DATA_DIR = "./data"
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
-# 네이버 오픈 API 자격증명 (실제론 환경변수로 관리하세요)
-NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID", "QK5pGnOogpbtXc2_AQAQ")
-NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET", "xjH5Nn5auL")
+# 네이버 오픈 API 자격증명 (실제론 환경변수로 관리)
+NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID")
+NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
 
-# 작업계획서 키워드 매핑
+# 작업계획서 키워드 매핑 (전부 포함)
 KEYWORD_ALIAS = {
     "고소작업 계획서": "고소작업대작업계획서", "고소 작업 계획서": "고소작업대작업계획서",
     "고소작업대 계획서": "고소작업대작업계획서", "고소작업": "고소작업대작업계획서",
@@ -53,6 +58,7 @@ def resolve_keyword(raw_keyword: str) -> str:
             return std
     return raw_keyword
 
+# XLSX 생성
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
     raw = request.args.get("template", "")
@@ -76,6 +82,7 @@ def create_xlsx():
     df.to_excel(xlsx_path, index=False)
     return send_file(xlsx_path, as_attachment=True, download_name=f"{tpl}.xlsx")
 
+# SafetyNews 본문 추출
 def fetch_safetynews_article_content(url):
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -86,6 +93,7 @@ def fetch_safetynews_article_content(url):
     except Exception:
         return "(본문 수집 실패)"
 
+# 네이버 뉴스 Open API 크롤링
 def crawl_naver_news():
     base_url = "https://openapi.naver.com/v1/search/news.json"
     headers = {
@@ -103,11 +111,11 @@ def crawl_naver_news():
         if resp.status_code != 200:
             continue
         for item in resp.json().get("items", []):
-            title = BeautifulSoup(item.get("title", ""), "html.parser").get_text()
-            desc  = BeautifulSoup(item.get("description", ""), "html.parser").get_text()
-            link  = item.get("link", "")
+            title = BeautifulSoup(item.get("title",""), "html.parser").get_text()
+            desc  = BeautifulSoup(item.get("description",""), "html.parser").get_text()
+            link  = item.get("link","")
             out.append({
-                "출처": item.get("originallink", "네이버"),
+                "출처": item.get("originallink","네이버"),
                 "제목": title,
                 "링크": link,
                 "날짜": "",
@@ -115,6 +123,7 @@ def crawl_naver_news():
             })
     return out
 
+# SafetyNews 크롤링
 def crawl_safetynews():
     base = "https://www.safetynews.co.kr"
     keywords = [
@@ -145,15 +154,37 @@ def crawl_safetynews():
             })
     return out
 
-@app.route("/daily_news", methods=["GET"])
-def get_daily_news():
-    try:
-        news = crawl_naver_news() + crawl_safetynews()
-        if not news:
-            return {"error": "가져올 뉴스가 없습니다."}, 200
-        return jsonify(news)
-    except Exception as e:
-        return {"error": f"Internal Server Error: {e}"}, 500
+# GPT로 뉴스 포맷팅
+@app.route("/render_news", methods=["GET"])
+def render_news():
+    news_items = crawl_naver_news() + crawl_safetynews()
+    if not news_items:
+        return {"error": "가져올 뉴스가 없습니다."}, 200
+
+    template_text = (
+        "📌 산업 안전 및 보건 최신 뉴스\n"
+        "📰 “{title}” ({date}, {source})\n\n"
+        "{headline}\n"
+        "🔎 {recommendation}\n"
+        "👉 요약 제공됨 · “뉴스 더 보여줘” 입력 시 유사 사례 추가 확인 가능"
+    )
+    system_message = {
+        "role": "system",
+        "content": (
+            "다음 JSON 형식의 뉴스 목록을 아래 템플릿에 맞춰 3개 항목 출력하세요.\n"
+            f"템플릿:\n{template_text}"
+        )
+    }
+    user_message = {"role": "user", "content": str(news_items)}
+
+    resp = openai.ChatCompletion.create(
+        model="gpt-4o-mini",
+        messages=[system_message, user_message],
+        max_tokens=800,
+        temperature=0.7
+    )
+    output = resp.choices[0].message.content
+    return jsonify({"formatted_news": output})
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
