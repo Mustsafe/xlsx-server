@@ -12,7 +12,7 @@ DATA_DIR = "./data"
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
-# ✅ 작업계획서 키워드 매핑
+# ✅ 기존 작업계획서 키워드 매핑 유지
 KEYWORD_ALIAS = {
     "고소작업 계획서": "고소작업대작업계획서", "고소 작업 계획서": "고소작업대작업계획서",
     "고소작업대 계획서": "고소작업대작업계획서", "고소작업": "고소작업대작업계획서",
@@ -73,6 +73,41 @@ def create_xlsx():
 
     return send_file(xlsx_path, as_attachment=True, download_name=f"{template_name}.xlsx")
 
+# ✅ 본문 수집 함수
+
+def fetch_naver_article_content(url):
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        content = ""
+        if soup.select_one("div#dic_area"):
+            content = soup.select_one("div#dic_area").get_text(separator="\n").strip()
+        elif soup.select_one("article"):
+            content = soup.select_one("article").get_text(separator="\n").strip()
+        else:
+            content = "(본문 수집 실패)"
+
+        return content
+    except:
+        return "(본문 수집 실패)"
+
+def fetch_safetynews_article_content(url):
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        if soup.select_one("div#article-view-content-div"):
+            content = soup.select_one("div#article-view-content-div").get_text(separator="\n").strip()
+        else:
+            content = "(본문 수집 실패)"
+
+        return content
+    except:
+        return "(본문 수집 실패)"
+
 # ✅ 뉴스 크롤링 함수 (본문 포함, 2개 제한)
 def crawl_naver_news():
     base_url = "https://search.naver.com/search.naver"
@@ -102,7 +137,7 @@ def crawl_naver_news():
                 "출처": "네이버",
                 "제목": title_tag["title"] if title_tag else "",
                 "링크": link,
-                "날짜": date_tag.text.strip() if date_tag else "",
+                "날짜": date_tag.text.strip() if date_tag else "날짜 정보 없음",
                 "본문": content[:1000]
             })
     return collected
@@ -135,7 +170,7 @@ def crawl_safetynews():
                 "출처": "안전신문",
                 "제목": title_element.text.strip() if title_element else "",
                 "링크": link,
-                "날짜": date_element.text.strip() if date_element else "",
+                "날짜": date_element.text.strip() if date_element else "날짜 정보 없음",
                 "본문": content[:1000]
             })
     return collected
