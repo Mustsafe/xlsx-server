@@ -4,7 +4,6 @@ import os
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor
 
 app = Flask(__name__)
 
@@ -126,7 +125,6 @@ def crawl_naver_news():
         for item in news_items:
             title_tag = item.select_one(".news_tit")
             link = title_tag.get("href") if title_tag else None
-            date_tag = item.select_one(".info_group span.date")
             content = ""
             if link:
                 article_res = requests.get(link, headers=headers, timeout=10)
@@ -138,7 +136,6 @@ def crawl_naver_news():
                 "출처": "네이버",
                 "제목": title_tag["title"] if title_tag else "",
                 "링크": link,
-                "날짜": date_tag.text.strip() if date_tag else "",
                 "본문": content[:1000]
             })
     return collected
@@ -159,7 +156,6 @@ def crawl_safetynews():
         for item in news_items:
             title_element = item.select_one(".list-titles")
             link = base_url + title_element.get("href") if title_element else None
-            date_element = item.select_one(".list-dated")
             content = ""
             if link:
                 article_res = requests.get(link, headers=headers, timeout=10)
@@ -171,7 +167,6 @@ def crawl_safetynews():
                 "출처": "안전신문",
                 "제목": title_element.text.strip() if title_element else "",
                 "링크": link,
-                "날짜": date_element.text.strip() if date_element else "",
                 "본문": content[:1000]
             })
     return collected
