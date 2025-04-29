@@ -51,20 +51,62 @@ def serve_logo():
 NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID")
 NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
 
-# 키워드 매핑 (구체 키우 먼저, 길이 내림차순으로 매칭)
+# 키워드 매핑 (구체 키 우선, 길이 내림차순으로 매칭)
 KEYWORD_ALIAS = {
-    "고소작업 사전점검표": "고소작업_사전점검표",
-    "고소작업 계획서": "고소작업대작업계획서",
-    "고소 작업 계획서": "고소작업대작업계획서",
-    "고소작업": "고소작업대작업계획서",
-    "밀폐공간 계획서": "밀폐공간작업계획서",
-    "밀폐공간": "밀폐공간작업계획서",
-    "해체 작업계획서": "해체작업계획서",
-    "크레인 계획서": "크레인작업계획서",
-    "비계 작업 계획서": "비계작업계획서",
-    "협착 작업 계획서": "협착위험작업계획서",
-    "양중기 작업계획서": "양중기_작업계획서",
-    "고압가스 작업 계획서": "고압가스작업계획서"
+    # 기존 11종
+    "고소작업 사전점검표":         "고소작업_사전점검표",
+    "고소작업 계획서":            "고소작업대작업계획서",
+    "고소 작업 계획서":           "고소작업대작업계획서",
+    "고소작업":                  "고소작업대작업계획서",
+    "밀폐공간 계획서":            "밀폐공간작업계획서",
+    "밀폐공간":                  "밀폐공간작업계획서",
+    "해체 작업계획서":            "해체작업계획서",
+    "크레인 계획서":              "크레인작업계획서",
+    "비계 작업 계획서":           "비계작업계획서",
+    "협착 작업 계획서":           "협착위험작업계획서",
+    "양중기 작업계획서":          "양중기_작업계획서",
+    "고압가스 작업 계획서":        "고압가스작업계획서",
+
+    # 추가된 39종
+    "가시설점검표":               "가시설점검표",
+    "고압가스작업계획서":         "고압가스작업계획서",
+    "교대근무계획표":             "교대근무계획표",
+    "구내버스운행관리대장":       "구내버스운행관리대장",
+    "굴삭기운전계획서":           "굴삭기운전계획서",
+    "위험기계잠금·격리절차서":     "위험기계잠금·격리절차서",
+    "방폭설비유지보수계획서":     "방폭설비유지보수계획서",
+    "보건관리순회일지":           "보건관리순회일지",
+    "비상대응훈련계획서":         "비상대응훈련계획서",
+    "사무실안전점검표":           "사무실안전점검표",
+    "생산설비정비계획서":         "생산설비정비계획서",
+    "선박·해양구조물점검표":       "선박·해양구조물점검표",
+    "소음진동측정계획서":         "소음진동측정계획서",
+    "소방설비점검표":             "소방설비점검표",
+    "안전교육계획서":             "안전교육계획서",
+    "안전보건관리체계구축계획서":   "안전보건관리체계구축계획서",
+    "안전작업허가절차서":         "안전작업허가절차서",
+    "안전작업일지":               "안전작업일지",
+    "산업안전보건위원회회의록":     "산업안전보건위원회회의록",
+    "산업재해예방계획서":         "산업재해예방계획서",
+    "시설물유지관리계획서":       "시설물유지관리계획서",
+    "승강기정기검사계획서":       "승강기정기검사계획서",
+    "아이소가스측정계획서":       "아이소가스측정계획서",
+    "작업허가서":                 "작업허가서",
+    "작업환경측정계획서":         "작업환경측정계획서",
+    "위험성평가매뉴얼":           "위험성평가매뉴얼",
+    "위험성평가보고서":           "위험성평가보고서",
+    "위험위해방지계획서":         "위험위해방지계획서",
+    "응급처치훈련기록표":         "응급처치훈련기록표",
+    "장비검사기록표":             "장비검사기록표",
+    "점검표작성가이드라인":       "점검표작성가이드라인",
+    "중대사고조사보고서":         "중대사고조사보고서",
+    "출입통제관리대장":           "출입통제관리대장",
+    "품질안전보증계획서":         "품질안전보증계획서",
+    "환경영향평가계획서":         "환경영향평가계획서",
+    "현장안전점검표":             "현장안전점검표",
+    "회전기계점검계획서":         "회전기계점검계획서",
+    "회의록서식(안전보건)":       "회의록서식(안전보건)",
+    "화학물질관리계획서":         "화학물질관리계획서",
 }
 
 def resolve_keyword(raw_keyword: str, template_list: List[str]) -> str:
@@ -148,7 +190,8 @@ def crawl_naver_news():
     for kw in keywords:
         params = {"query": kw, "display": 2, "sort": "date"}
         resp = requests.get(base_url, headers=headers, params=params, timeout=10)
-        if resp.status_code != 200: continue
+        if resp.status_code != 200:
+            continue
         for item in resp.json().get("items", []):
             title = BeautifulSoup(item.get("title",""), "html.parser").get_text()
             desc  = BeautifulSoup(item.get("description",""), "html.parser").get_text()
@@ -166,8 +209,10 @@ def crawl_safetynews():
     keywords = ["건설 사고","추락 사고","끼임 사고","질식 사고","폭발 사고","산업재해","산업안전"]
     out = []
     for kw in keywords:
-        resp = requests.get(f"{base}/search/news?searchword={kw}", headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
-        if resp.status_code != 200: continue
+        resp = requests.get(f"{base}/search/news?searchword={kw}",
+                            headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
+        if resp.status_code != 200:
+            continue
         soup = BeautifulSoup(resp.text, "html.parser")
         for item in soup.select(".article-list-content")[:2]:
             t    = item.select_one(".list-titles")
@@ -226,7 +271,7 @@ def render_news():
         max_tokens=800,
         temperature=0.7
     )
-    return jsonify({"formatted_news":resp.choices[0].message.content})
+    return jsonify({"formatted_news": resp.choices[0].message.content})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
