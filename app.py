@@ -51,7 +51,7 @@ NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
 
 # 키워드 매핑
 KEYWORD_ALIAS = {
-    "고소작업 계획서": "고소작업대작업계획서",  
+    "고소작업 계획서": "고소작업대작업계획서",
     "고소 작업 계획서": "고소작업대작업계획서",
     "고소작업": "고소작업대작업계획서",
     "밀폐공간 계획서": "밀폐공간작업계획서",
@@ -74,7 +74,7 @@ def resolve_keyword(raw_keyword: str) -> str:
 def index():
     return "📰 사용 가능한 엔드포인트: /daily_news, /render_news, /create_xlsx", 200
 
-# ════ 수정된 XLSX 생성 엔드포인트 ════
+# ════ XLSX 생성 엔드포인트 ════
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
     raw = request.args.get("template", "")
@@ -113,7 +113,7 @@ def create_xlsx():
     )
 
 # SafetyNews 본문 추출
- def fetch_safetynews_article_content(url):
+def fetch_safetynews_article_content(url):
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
         resp = requests.get(url, headers=headers, timeout=10)
@@ -124,7 +124,7 @@ def create_xlsx():
         return "(본문 수집 실패)"
 
 # 네이버 뉴스 크롤링
- def crawl_naver_news():
+def crawl_naver_news():
     base_url = "https://openapi.naver.com/v1/search/news.json"
     headers = {
         "X-Naver-Client-Id": NAVER_CLIENT_ID,
@@ -150,7 +150,7 @@ def create_xlsx():
     return out
 
 # SafetyNews 크롤링
- def crawl_safetynews():
+def crawl_safetynews():
     base = "https://www.safetynews.co.kr"
     keywords = ["건설 사고", "추락 사고", "끼임 사고", "질식 사고", "폭발 사고", "산업재해", "산업안전"]
     out = []
