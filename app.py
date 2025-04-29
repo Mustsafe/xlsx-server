@@ -62,6 +62,7 @@ KEYWORD_ALIAS = {
     "협착 작업 계획서": "협착위험작업계획서",
     "양중기 작업계획서": "크레인작업계획서",
     "고압가스 작업 계획서": "고압가스작업계획서"
+    # 필요하다면 여기에 새 매핑 추가
 }
 
 def resolve_keyword(raw_keyword: str) -> str:
@@ -74,7 +75,7 @@ def resolve_keyword(raw_keyword: str) -> str:
 def index():
     return "📰 사용 가능한 엔드포인트: /daily_news, /render_news, /create_xlsx", 200
 
-# ════ XLSX 생성 엔드포인트 ════
+# ════ 수정된 XLSX 생성 엔드포인트 ════
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
     raw = request.args.get("template", "")
@@ -96,7 +97,7 @@ def create_xlsx():
     if filtered.empty:
         return {"error": f"'{tpl}' 양식을 찾을 수 없습니다."}, 404
 
-    # 실제로 존재하는 컬럼으로 수정: 실무 예시 1, 실무 예시 2 포함
+    # 실제로 존재하는 컬럼만 추출
     columns_to_use = ["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]
     out_df = filtered[columns_to_use]
 
