@@ -51,8 +51,9 @@ def serve_logo():
 NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID")
 NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
 
-# 키워드 매핑
+# 키워드 매핑 (구체 키우 먼저, 길이 내림차순으로 매칭)
 KEYWORD_ALIAS = {
+    "고소작업 사전점검표": "고소작업_사전점검표",
     "고소작업 계획서": "고소작업대작업계획서",
     "고소 작업 계획서": "고소작업대작업계획서",
     "고소작업": "고소작업대작업계획서",
@@ -62,20 +63,20 @@ KEYWORD_ALIAS = {
     "크레인 계획서": "크레인작업계획서",
     "비계 작업 계획서": "비계작업계획서",
     "협착 작업 계획서": "협착위험작업계획서",
-    "양중기 작업계획서": "크레인작업계획서",
+    "양중기 작업계획서": "양중기_작업계획서",
     "고압가스 작업 계획서": "고압가스작업계획서"
 }
 
 def resolve_keyword(raw_keyword: str, template_list: List[str]) -> str:
     """
-    1) KEYWORD_ALIAS 매핑 우선 적용
+    1) KEYWORD_ALIAS 매핑 우선 적용 (길이 순)
     2) difflib로 fuzzy 매칭
     3) 못 찾으면 원본 반환(이후 404 처리)
     """
-    # 1) alias
-    for alias, std in KEYWORD_ALIAS.items():
+    # 1) alias (길이 순으로 구체 매핑 먼저)
+    for alias in sorted(KEYWORD_ALIAS.keys(), key=len, reverse=True):
         if alias in raw_keyword:
-            return std
+            return KEYWORD_ALIAS[alias]
 
     # 2) fuzzy match
     cleaned = raw_keyword.replace(" ", "").lower()
