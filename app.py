@@ -4,9 +4,11 @@ import os
 import requests
 from bs4 import BeautifulSoup
 import openai
+import difflib
 from dateutil import parser
 from datetime import datetime, timedelta
 from io import BytesIO
+from typing import List
 
 app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False  # 한글 깨짐 방지
@@ -64,43 +66,53 @@ KEYWORD_ALIAS = {
     "고압가스 작업 계획서": "고압가스작업계획서"
 }
 
-def resolve_keyword(raw_keyword: str) -> str:
+def resolve_keyword(raw_keyword: str, template_list: List[str]) -> str:
+    """
+    1) KEYWORD_ALIAS 매핑 우선 적용
+    2) difflib로 fuzzy 매칭
+    3) 못 찾으면 원본 반환(이후 404 처리)
+    """
+    # 1) alias
     for alias, std in KEYWORD_ALIAS.items():
         if alias in raw_keyword:
             return std
+
+    # 2) fuzzy match
+    cleaned = raw_keyword.replace(" ", "").lower()
+    candidates = [t.replace(" ", "").lower() for t in template_list]
+    matches = difflib.get_close_matches(cleaned, candidates, n=1, cutoff=0.6)
+    if matches:
+        idx = candidates.index(matches[0])
+        return template_list[idx]
+
+    # 3) no match
     return raw_keyword
 
 @app.route("/", methods=["GET"])
 def index():
     return "📰 사용 가능한 엔드포인트: /daily_news, /render_news, /create_xlsx", 200
 
-# ════ XLSX 생성 엔드포인트 ════
+# XLSX 생성 엔드포인트
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
     raw = request.args.get("template", "")
-    tpl = resolve_keyword(raw)
-
     csv_path = os.path.join(DATA_DIR, "통합_노지파일.csv")
     if not os.path.exists(csv_path):
         return {"error": "통합 CSV 파일이 없습니다."}, 404
 
     df = pd.read_csv(csv_path)
-
-    # 1) '템플릿명' 컬럼으로 정확히 매칭
-    if "템플릿명" in df.columns:
-        mask = df["템플릿명"].astype(str) == tpl
-        filtered = df[mask]
-    else:
+    if "템플릿명" not in df.columns:
         return {"error": "필요한 '템플릿명' 컬럼이 없습니다."}, 500
 
+    # fuzzy 매칭 적용
+    template_list = sorted(df["템플릿명"].dropna().unique().tolist())
+    tpl = resolve_keyword(raw, template_list)
+
+    filtered = df[df["템플릿명"].astype(str) == tpl]
     if filtered.empty:
         return {"error": f"'{tpl}' 양식을 찾을 수 없습니다."}, 404
 
-    # 2) 실제로 뽑아낼 컬럼
-    columns_to_use = ["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]
-    out_df = filtered[columns_to_use]
-
-    # 3) 메모리 상에서 엑셀 파일 생성
+    out_df = filtered[["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]]
     output = BytesIO()
     out_df.to_excel(output, index=False)
     output.seek(0)
@@ -112,7 +124,8 @@ def create_xlsx():
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
-# SafetyNews 본문 추출
+# 이하 뉴스 크롤링 및 렌더 함수 (수정 없음)
+
 def fetch_safetynews_article_content(url):
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -120,10 +133,9 @@ def fetch_safetynews_article_content(url):
         soup = BeautifulSoup(resp.text, "html.parser")
         node = soup.select_one("div#article-view-content-div")
         return node.get_text("\n").strip() if node else "(본문 수집 실패)"
-    except Exception:
+    except:
         return "(본문 수집 실패)"
 
-# 네이버 뉴스 크롤링
 def crawl_naver_news():
     base_url = "https://openapi.naver.com/v1/search/news.json"
     headers = {
@@ -135,8 +147,7 @@ def crawl_naver_news():
     for kw in keywords:
         params = {"query": kw, "display": 2, "sort": "date"}
         resp = requests.get(base_url, headers=headers, params=params, timeout=10)
-        if resp.status_code != 200:
-            continue
+        if resp.status_code != 200: continue
         for item in resp.json().get("items", []):
             title = BeautifulSoup(item.get("title",""), "html.parser").get_text()
             desc  = BeautifulSoup(item.get("description",""), "html.parser").get_text()
@@ -149,16 +160,13 @@ def crawl_naver_news():
             })
     return out
 
-# SafetyNews 크롤링
 def crawl_safetynews():
     base = "https://www.safetynews.co.kr"
     keywords = ["건설 사고","추락 사고","끼임 사고","질식 사고","폭발 사고","산업재해","산업안전"]
     out = []
     for kw in keywords:
-        resp = requests.get(f"{base}/search/news?searchword={kw}",
-                            headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
-        if resp.status_code != 200:
-            continue
+        resp = requests.get(f"{base}/search/news?searchword={kw}", headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
+        if resp.status_code != 200: continue
         soup = BeautifulSoup(resp.text, "html.parser")
         for item in soup.select(".article-list-content")[:2]:
             t    = item.select_one(".list-titles")
@@ -174,7 +182,6 @@ def crawl_safetynews():
             })
     return out
 
-# 원본 뉴스 JSON 반환
 @app.route("/daily_news", methods=["GET"])
 def get_daily_news():
     news = crawl_naver_news() + crawl_safetynews()
@@ -182,7 +189,6 @@ def get_daily_news():
         return jsonify({"error":"가져올 뉴스가 없습니다."}), 200
     return jsonify(news)
 
-# GPT 포맷 뉴스 반환
 @app.route("/render_news", methods=["GET"])
 def render_news():
     raw    = crawl_naver_news() + crawl_safetynews()
