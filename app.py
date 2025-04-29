@@ -62,7 +62,6 @@ KEYWORD_ALIAS = {
     "협착 작업 계획서": "협착위험작업계획서",
     "양중기 작업계획서": "크레인작업계획서",
     "고압가스 작업 계획서": "고압가스작업계획서"
-    # 필요하다면 여기에 새 매핑 추가
 }
 
 def resolve_keyword(raw_keyword: str) -> str:
@@ -75,7 +74,7 @@ def resolve_keyword(raw_keyword: str) -> str:
 def index():
     return "📰 사용 가능한 엔드포인트: /daily_news, /render_news, /create_xlsx", 200
 
-# ════ 수정된 XLSX 생성 엔드포인트 ════
+# ════ XLSX 생성 엔드포인트 ════
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
     raw = request.args.get("template", "")
@@ -87,20 +86,19 @@ def create_xlsx():
 
     df = pd.read_csv(csv_path)
 
-    # — 부분 일치 필터링 로직 —
-    if "템플릿명" in df.columns:
-        # tpl 값을 포함하는 모든 행을 가져옵니다.
-        mask = df["템플릿명"].astype(str).str.contains(tpl)
+    # '작업 항목' 컬럼을 사용한 필터링 로직
+    if "작업 항목" in df.columns:
+        mask = df["작업 항목"].astype(str).str.contains(tpl)
         filtered = df[mask]
     else:
-        # 컬럼명이 다르게 들어간 경우 CSV 전체를 내려줍니다.
-        filtered = df
+        return {"error": "필요한 '작업 항목' 컬럼이 없습니다."}, 500
 
     if filtered.empty:
         return {"error": f"'{tpl}' 양식을 찾을 수 없습니다."}, 404
 
-    # 실제로 필요한 컬럼만 추출
-    out_df = filtered[["작업 항목", "작성 양식", "실무 예시"]]
+    # 실제로 존재하는 컬럼으로 수정: 실무 예시 1, 실무 예시 2 포함
+    columns_to_use = ["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]
+    out_df = filtered[columns_to_use]
 
     # 메모리 상에서 엑셀 파일 생성
     output = BytesIO()
@@ -115,7 +113,7 @@ def create_xlsx():
     )
 
 # SafetyNews 본문 추출
-def fetch_safetynews_article_content(url):
+ def fetch_safetynews_article_content(url):
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
         resp = requests.get(url, headers=headers, timeout=10)
@@ -126,7 +124,7 @@ def fetch_safetynews_article_content(url):
         return "(본문 수집 실패)"
 
 # 네이버 뉴스 크롤링
-def crawl_naver_news():
+ def crawl_naver_news():
     base_url = "https://openapi.naver.com/v1/search/news.json"
     headers = {
         "X-Naver-Client-Id": NAVER_CLIENT_ID,
@@ -151,7 +149,7 @@ def crawl_naver_news():
     return out
 
 # SafetyNews 크롤링
-def crawl_safetynews():
+ def crawl_safetynews():
     base = "https://www.safetynews.co.kr"
     keywords = ["건설 사고","추락 사고","끼임 사고","질식 사고","폭발 사고","산업재해","산업안전"]
     out = []
@@ -174,16 +172,16 @@ def crawl_safetynews():
     return out
 
 # 원본 뉴스 JSON 반환
-@app.route("/daily_news", methods=["GET"])
-def get_daily_news():
+ @app.route("/daily_news", methods=["GET"])
+ def get_daily_news():
     news = crawl_naver_news() + crawl_safetynews()
     if not news:
         return jsonify({"error":"가져올 뉴스가 없습니다."}), 200
     return jsonify(news)
 
 # GPT 포맷 뉴스 반환
-@app.route("/render_news", methods=["GET"])
-def render_news():
+ @app.route("/render_news", methods=["GET"])
+ def render_news():
     raw    = crawl_naver_news() + crawl_safetynews()
     cutoff = datetime.utcnow() - timedelta(days=3)
     filtered = []
