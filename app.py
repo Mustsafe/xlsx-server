@@ -81,7 +81,7 @@ def resolve_keyword(raw_keyword: str) -> str:
 def index():
     return "📰 사용 가능한 엔드포인트: /daily_news, /render_news, /create_xlsx", 200
 
-# XLSX 생성 (수정) - 통합 CSV에서 가져옴
+# XLSX 생성 - 통합 CSV 읽기
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
     raw = request.args.get("template", "")
@@ -91,8 +91,10 @@ def create_xlsx():
     if not os.path.exists(csv_path):
         return {"error": "통합 CSV 파일이 없습니다."}, 404
 
-    df = pd.read_csv(csv_path)
-    filtered = df[df["템플릿명"] == tpl]
+    df = pd.read_csv(csv_path, encoding='utf-8')
+    # ★ 수정된 부분: strip() 추가해 필터링 강화
+    filtered = df[df["템플릿명"].str.strip() == tpl.strip()]
+    
     if filtered.empty:
         return {"error": f"'{tpl}' 양식을 찾을 수 없습니다."}, 404
 
