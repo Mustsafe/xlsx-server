@@ -86,7 +86,7 @@ def create_xlsx():
 
     df = pd.read_csv(csv_path)
 
-    # '템플릿명' 컬럼을 사용한 필터링 로직
+    # 1) '템플릿명' 컬럼으로 정확히 매칭
     if "템플릿명" in df.columns:
         mask = df["템플릿명"].astype(str) == tpl
         filtered = df[mask]
@@ -96,11 +96,11 @@ def create_xlsx():
     if filtered.empty:
         return {"error": f"'{tpl}' 양식을 찾을 수 없습니다."}, 404
 
-    # 실제로 뽑아낼 컬럼
+    # 2) 실제로 뽑아낼 컬럼
     columns_to_use = ["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]
     out_df = filtered[columns_to_use]
 
-    # 메모리 상에서 엑셀 파일 생성
+    # 3) 메모리 상에서 엑셀 파일 생성
     output = BytesIO()
     out_df.to_excel(output, index=False)
     output.seek(0)
@@ -130,7 +130,7 @@ def crawl_naver_news():
         "X-Naver-Client-Id": NAVER_CLIENT_ID,
         "X-Naver-Client-Secret": NAVER_CLIENT_SECRET
     }
-    keywords = ["건설 사고", "추락 사고", "끼임 사고", "질식 사고", "폭발 사고", "산업재해", "산업안전"]
+    keywords = ["건설 사고","추락 사고","끼임 사고","질식 사고","폭발 사고","산업재해","산업안전"]
     out = []
     for kw in keywords:
         params = {"query": kw, "display": 2, "sort": "date"}
@@ -138,13 +138,13 @@ def crawl_naver_news():
         if resp.status_code != 200:
             continue
         for item in resp.json().get("items", []):
-            title = BeautifulSoup(item.get("title", ""), "html.parser").get_text()
-            desc = BeautifulSoup(item.get("description", ""), "html.parser").get_text()
+            title = BeautifulSoup(item.get("title",""), "html.parser").get_text()
+            desc  = BeautifulSoup(item.get("description",""), "html.parser").get_text()
             out.append({
-                "출처": item.get("originallink", "네이버"),
+                "출처": item.get("originallink","네이버"),
                 "제목": title,
-                "링크": item.get("link", ""),
-                "날짜": item.get("pubDate", ""),
+                "링크": item.get("link",""),
+                "날짜": item.get("pubDate",""),
                 "본문": desc
             })
     return out
@@ -152,17 +152,18 @@ def crawl_naver_news():
 # SafetyNews 크롤링
 def crawl_safetynews():
     base = "https://www.safetynews.co.kr"
-    keywords = ["건설 사고", "추락 사고", "끼임 사고", "질식 사고", "폭발 사고", "산업재해", "산업안전"]
+    keywords = ["건설 사고","추락 사고","끼임 사고","질식 사고","폭발 사고","산업재해","산업안전"]
     out = []
     for kw in keywords:
-        resp = requests.get(f"{base}/search/news?searchword={kw}", headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        resp = requests.get(f"{base}/search/news?searchword={kw}",
+                            headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
         if resp.status_code != 200:
             continue
         soup = BeautifulSoup(resp.text, "html.parser")
         for item in soup.select(".article-list-content")[:2]:
-            t = item.select_one(".list-titles")
+            t    = item.select_one(".list-titles")
             href = base + t["href"] if t and t.get("href") else None
-            d = item.select_one(".list-dated")
+            d    = item.select_one(".list-dated")
             content = fetch_safetynews_article_content(href) if href else ""
             out.append({
                 "출처": "안전신문",
@@ -178,13 +179,13 @@ def crawl_safetynews():
 def get_daily_news():
     news = crawl_naver_news() + crawl_safetynews()
     if not news:
-        return jsonify({"error": "가져올 뉴스가 없습니다."}), 200
+        return jsonify({"error":"가져올 뉴스가 없습니다."}), 200
     return jsonify(news)
 
 # GPT 포맷 뉴스 반환
 @app.route("/render_news", methods=["GET"])
 def render_news():
-    raw = crawl_naver_news() + crawl_safetynews()
+    raw    = crawl_naver_news() + crawl_safetynews()
     cutoff = datetime.utcnow() - timedelta(days=3)
     filtered = []
     for n in raw:
@@ -197,7 +198,7 @@ def render_news():
             filtered.append(n)
     news_items = sorted(filtered, key=lambda x: parser.parse(x["날짜"]), reverse=True)[:3]
     if not news_items:
-        return jsonify({"error": "가져올 뉴스가 없습니다."}), 200
+        return jsonify({"error":"가져올 뉴스가 없습니다."}), 200
 
     template_text = (
         "📌 산업 안전 및 보건 최신 뉴스\n"
@@ -207,10 +208,10 @@ def render_news():
         "👉 요약 제공됨 · “뉴스 더 보여줘” 입력 시 유사 사례 추가 확인 가능"
     )
     system_message = {
-        "role": "system",
-        "content": f"다음 JSON 형식의 뉴스 목록을 아래 템플릿에 맞춰 출력하세요.\n템플릿:\n{template_text}"
+        "role":"system",
+        "content":f"다음 JSON 형식의 뉴스 목록을 아래 템플릿에 맞춰 출력하세요.\n템플릿:\n{template_text}"
     }
-    user_message = {"role": "user", "content": str(news_items)}
+    user_message = {"role":"user","content":str(news_items)}
 
     resp = openai.ChatCompletion.create(
         model="gpt-4o-mini",
@@ -218,7 +219,7 @@ def render_news():
         max_tokens=800,
         temperature=0.7
     )
-    return jsonify({"formatted_news": resp.choices[0].message.content})
+    return jsonify({"formatted_news":resp.choices[0].message.content})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
