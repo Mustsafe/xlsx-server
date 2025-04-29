@@ -86,17 +86,17 @@ def create_xlsx():
 
     df = pd.read_csv(csv_path)
 
-    # '작업 항목' 컬럼을 사용한 필터링 로직
-    if "작업 항목" in df.columns:
-        mask = df["작업 항목"].astype(str).str.contains(tpl)
+    # '템플릿명' 컬럼을 사용한 필터링 로직
+    if "템플릿명" in df.columns:
+        mask = df["템플릿명"].astype(str) == tpl
         filtered = df[mask]
     else:
-        return {"error": "필요한 '작업 항목' 컬럼이 없습니다."}, 500
+        return {"error": "필요한 '템플릿명' 컬럼이 없습니다."}, 500
 
     if filtered.empty:
         return {"error": f"'{tpl}' 양식을 찾을 수 없습니다."}, 404
 
-    # 실제로 존재하는 컬럼만 추출
+    # 실제로 뽑아낼 컬럼
     columns_to_use = ["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]
     out_df = filtered[columns_to_use]
 
