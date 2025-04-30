@@ -9,6 +9,7 @@ from dateutil import parser
 from datetime import datetime, timedelta
 from io import BytesIO
 from typing import List
+from itertools import product
 
 app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False  # 한글 깨짐 방지
@@ -51,74 +52,42 @@ def serve_logo():
 NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID")
 NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
 
-# 키워드 매핑 (구체 키 우선, 길이 내림차순으로 매칭)
-KEYWORD_ALIAS = {
-    # 기존 11종
-    "고소작업 사전점검표":         "고소작업_사전점검표",
-    "고소작업 계획서":            "고소작업대작업계획서",
-    "고소 작업 계획서":           "고소작업대작업계획서",
-    "고소작업":                  "고소작업대작업계획서",
-    "밀폐공간 계획서":            "밀폐공간작업계획서",
-    "밀폐공간":                  "밀폐공간작업계획서",
-    "해체 작업계획서":            "해체작업계획서",
-    "크레인 계획서":              "크레인작업계획서",
-    "비계 작업 계획서":           "비계작업계획서",
-    "협착 작업 계획서":           "협착위험작업계획서",
-    "양중기 작업계획서":          "양중기_작업계획서",
-    "고압가스 작업 계획서":        "고압가스작업계획서",
-
-    # 추가된 39종
-    "가시설점검표":               "가시설점검표",
-    "고압가스작업계획서":         "고압가스작업계획서",
-    "교대근무계획표":             "교대근무계획표",
-    "구내버스운행관리대장":       "구내버스운행관리대장",
-    "굴삭기운전계획서":           "굴삭기운전계획서",
-    "위험기계잠금·격리절차서":     "위험기계잠금·격리절차서",
-    "방폭설비유지보수계획서":     "방폭설비유지보수계획서",
-    "보건관리순회일지":           "보건관리순회일지",
-    "비상대응훈련계획서":         "비상대응훈련계획서",
-    "사무실안전점검표":           "사무실안전점검표",
-    "생산설비정비계획서":         "생산설비정비계획서",
-    "선박·해양구조물점검표":       "선박·해양구조물점검표",
-    "소음진동측정계획서":         "소음진동측정계획서",
-    "소방설비점검표":             "소방설비점검표",
-    "안전교육계획서":             "안전교육계획서",
-    "안전보건관리체계구축계획서":   "안전보건관리체계구축계획서",
-    "안전작업허가절차서":         "안전작업허가절차서",
-    "안전작업일지":               "안전작업일지",
-    "산업안전보건위원회회의록":     "산업안전보건위원회회의록",
-    "산업재해예방계획서":         "산업재해예방계획서",
-    "시설물유지관리계획서":       "시설물유지관리계획서",
-    "승강기정기검사계획서":       "승강기정기검사계획서",
-    "아이소가스측정계획서":       "아이소가스측정계획서",
-    "작업허가서":                 "작업허가서",
-    "작업환경측정계획서":         "작업환경측정계획서",
-    "위험성평가매뉴얼":           "위험성평가매뉴얼",
-    "위험성평가보고서":           "위험성평가보고서",
-    "위험위해방지계획서":         "위험위해방지계획서",
-    "응급처치훈련기록표":         "응급처치훈련기록표",
-    "장비검사기록표":             "장비검사기록표",
-    "점검표작성가이드라인":       "점검표작성가이드라인",
-    "중대사고조사보고서":         "중대사고조사보고서",
-    "출입통제관리대장":           "출입통제관리대장",
-    "품질안전보증계획서":         "품질안전보증계획서",
-    "환경영향평가계획서":         "환경영향평가계획서",
-    "현장안전점검표":             "현장안전점검표",
-    "회전기계점검계획서":         "회전기계점검계획서",
-    "회의록서식(안전보건)":       "회의록서식(안전보건)",
-    "화학물질관리계획서":         "화학물질관리계획서",
-}
-
-def resolve_keyword(raw_keyword: str, template_list: List[str]) -> str:
+def build_alias_map(template_list: List[str]) -> dict:
     """
-    1) KEYWORD_ALIAS 매핑 우선 적용 (길이 순)
+    template_list 에 있는 각 템플릿명에 대해
+    다양한 변형(alias)을 자동 생성하여 매핑 dict 를 반환합니다.
+    """
+    alias = {}
+    for tpl in template_list:
+        # 1) 원래 이름
+        alias[tpl] = tpl
+        # 2) 언더스코어 → 공백
+        alias[tpl.replace("_", " ")] = tpl
+        # 3) 공백 → 언더스코어
+        alias[tpl.replace(" ", "_")] = tpl
+        # 4) 소문자 버전
+        low = tpl.lower()
+        alias[low] = tpl
+        alias[low.replace("_", " ")] = tpl
+        # 5) 주요 접미사 추가
+        base_space = tpl.replace("_", " ")
+        for suf in [" 점검표", " 계획서", " 서식", " 표"]:
+            combo = base_space + suf
+            alias[combo] = tpl
+            alias[combo.replace(" ", "_")] = tpl
+            alias[combo.lower()] = tpl
+    return alias
+
+def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict) -> str:
+    """
+    1) alias_map 매핑 우선 적용
     2) difflib로 fuzzy 매칭
     3) 못 찾으면 원본 반환(이후 fallback 처리)
     """
-    # 1) alias (길이 순으로 구체 매핑 먼저)
-    for alias in sorted(KEYWORD_ALIAS.keys(), key=len, reverse=True):
-        if alias in raw_keyword:
-            return KEYWORD_ALIAS[alias]
+    # 1) alias 맵
+    key = raw_keyword.strip()
+    if key in alias_map:
+        return alias_map[key]
     # 2) fuzzy match
     cleaned = raw_keyword.replace(" ", "").lower()
     candidates = [t.replace(" ", "").lower() for t in template_list]
@@ -145,13 +114,16 @@ def create_xlsx():
     if "템플릿명" not in df.columns:
         return {"error": "필요한 '템플릿명' 컬럼이 없습니다."}, 500
 
-    # fuzzy 매칭 적용
+    # 템플릿 목록 및 alias_map 생성
     template_list = sorted(df["템플릿명"].dropna().unique().tolist())
-    tpl = resolve_keyword(raw, template_list)
+    alias_map = build_alias_map(template_list)
 
+    # 키워드 해석
+    tpl = resolve_keyword(raw, template_list, alias_map)
+
+    # 필터링 및 fallback 처리
     filtered = df[df["템플릿명"].astype(str) == tpl]
     if filtered.empty:
-        # ◀─ fallback: 매칭 실패 시 기본 템플릿(첫 항목) 사용
         default_tpl = template_list[0]
         filtered = df[df["템플릿명"] == default_tpl]
         used_tpl = default_tpl
