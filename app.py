@@ -113,13 +113,12 @@ def resolve_keyword(raw_keyword: str, template_list: List[str]) -> str:
     """
     1) KEYWORD_ALIAS 매핑 우선 적용 (길이 순)
     2) difflib로 fuzzy 매칭
-    3) 못 찾으면 원본 반환(이후 404 처리)
+    3) 못 찾으면 원본 반환(이후 fallback 처리)
     """
     # 1) alias (길이 순으로 구체 매핑 먼저)
     for alias in sorted(KEYWORD_ALIAS.keys(), key=len, reverse=True):
         if alias in raw_keyword:
             return KEYWORD_ALIAS[alias]
-
     # 2) fuzzy match
     cleaned = raw_keyword.replace(" ", "").lower()
     candidates = [t.replace(" ", "").lower() for t in template_list]
@@ -127,7 +126,6 @@ def resolve_keyword(raw_keyword: str, template_list: List[str]) -> str:
     if matches:
         idx = candidates.index(matches[0])
         return template_list[idx]
-
     # 3) no match
     return raw_keyword
 
@@ -153,7 +151,12 @@ def create_xlsx():
 
     filtered = df[df["템플릿명"].astype(str) == tpl]
     if filtered.empty:
-        return {"error": f"'{tpl}' 양식을 찾을 수 없습니다."}, 404
+        # ◀─ fallback: 매칭 실패 시 기본 템플릿(첫 항목) 사용
+        default_tpl = template_list[0]
+        filtered = df[df["템플릿명"] == default_tpl]
+        used_tpl = default_tpl
+    else:
+        used_tpl = tpl
 
     out_df = filtered[["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]]
     output = BytesIO()
@@ -163,12 +166,11 @@ def create_xlsx():
     return send_file(
         output,
         as_attachment=True,
-        download_name=f"{tpl}.xlsx",
+        download_name=f"{used_tpl}.xlsx",
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
 # 이하 뉴스 크롤링 및 렌더 함수 (수정 없음)
-
 def fetch_safetynews_article_content(url):
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -248,6 +250,7 @@ def render_news():
         if dt >= cutoff:
             n["날짜"] = dt.strftime("%Y.%m.%d")
             filtered.append(n)
+
     news_items = sorted(filtered, key=lambda x: parser.parse(x["날짜"]), reverse=True)[:3]
     if not news_items:
         return jsonify({"error":"가져올 뉴스가 없습니다."}), 200
