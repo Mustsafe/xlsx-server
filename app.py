@@ -61,15 +61,14 @@ def build_alias_map(template_list: List[str]) -> dict:
     for tpl in template_list:
         # 1) 원래 이름
         alias[tpl] = tpl
-        # 2) 언더스코어 → 공백
+        # 2) 언더스코어 ↔ 공백
         alias[tpl.replace("_", " ")] = tpl
-        # 3) 공백 → 언더스코어
         alias[tpl.replace(" ", "_")] = tpl
-        # 4) 소문자 버전
+        # 3) 소문자 버전
         low = tpl.lower()
         alias[low] = tpl
         alias[low.replace("_", " ")] = tpl
-        # 5) 주요 접미사 추가
+        # 4) 주요 접미사 추가
         base_space = tpl.replace("_", " ")
         for suf in [" 점검표", " 계획서", " 서식", " 표"]:
             combo = base_space + suf
@@ -80,23 +79,33 @@ def build_alias_map(template_list: List[str]) -> dict:
 
 def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict) -> str:
     """
-    1) alias_map 매핑 우선 적용
-    2) difflib로 fuzzy 매칭
-    3) 못 찾으면 원본 반환(이후 fallback 처리)
+    1) 토큰 기반 매칭: raw_keyword를 분리한 토큰이 tpl에 모두 포함되면 바로 매치
+    2) alias_map 매핑 우선 적용
+    3) difflib로 fuzzy 매칭 (언더스코어·공백 모두 제거)
+    4) 못 찾으면 원본 반환(이후 fallback 처리)
     """
-    # 1) alias 맵
     key = raw_keyword.strip()
+    # 1) 토큰 기반 매칭
+    tokens = [t for t in key.replace("_", " ").split(" ") if t]
+    candidates = [tpl for tpl in template_list
+                  if all(tok in tpl for tok in tokens)]
+    if len(candidates) == 1:
+        return candidates[0]
+
+    # 2) alias 맵
     if key in alias_map:
         return alias_map[key]
-    # 2) fuzzy match
-    cleaned = raw_keyword.replace(" ", "").lower()
-    candidates = [t.replace(" ", "").lower() for t in template_list]
-    matches = difflib.get_close_matches(cleaned, candidates, n=1, cutoff=0.6)
+
+    # 3) fuzzy match (언더스코어·공백 모두 제거)
+    cleaned = key.replace(" ", "").replace("_", "").lower()
+    candidates_norm = [t.replace(" ", "").replace("_", "").lower() for t in template_list]
+    matches = difflib.get_close_matches(cleaned, candidates_norm, n=1, cutoff=0.6)
     if matches:
-        idx = candidates.index(matches[0])
+        idx = candidates_norm.index(matches[0])
         return template_list[idx]
-    # 3) no match
-    return raw_keyword
+
+    # 4) no match
+    return key
 
 @app.route("/", methods=["GET"])
 def index():
