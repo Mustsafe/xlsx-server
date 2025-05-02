@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from io import BytesIO
 from typing import List
 from itertools import product
+from urllib.parse import quote
 
 app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False  # 한글 깨짐 방지
@@ -84,16 +85,22 @@ def build_alias_map(template_list: List[str]) -> dict:
 
 def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict) -> str:
     """
-    1) 토큰 기반 매칭: raw_keyword를 분리한 토큰이 tpl에 모두 포함되면 바로 매치
-    2) alias_map 매핑 우선 적용
-    3) difflib로 fuzzy 매칭 (언더스코어·공백 모두 제거)
-    4) 못 찾으면 원본 반환(이후 fallback 처리)
+    0) 완전 일치 우선 (대소문자 구분 없이)
+    1) 토큰 기반 매칭
+    2) alias_map 매핑
+    3) fuzzy 매칭
+    4) 매칭 실패 시 에러 유도
     """
     key = raw_keyword.strip()
+
+    # 0) 완전 일치 우선
+    for tpl in template_list:
+        if key.lower() == tpl.lower() or key.replace(" ", "").lower() == tpl.replace(" ", "").lower():
+            return tpl
+
     # 1) 토큰 기반 매칭
     tokens = [t for t in key.replace("_", " ").split(" ") if t]
-    candidates = [tpl for tpl in template_list
-                  if all(tok in tpl for tok in tokens)]
+    candidates = [tpl for tpl in template_list if all(tok in tpl for tok in tokens)]
     if len(candidates) == 1:
         return candidates[0]
 
@@ -109,8 +116,8 @@ def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict)
         idx = candidates_norm.index(matches[0])
         return template_list[idx]
 
-    # 4) no match
-    return key
+    # 4) no match → 에러 유도
+    raise ValueError(f"템플릿 ‘{raw_keyword}’을(를) 찾을 수 없습니다. 정확한 이름을 입력해주세요.")
 
 @app.route("/", methods=["GET"])
 def index():
@@ -128,16 +135,13 @@ def create_xlsx():
     if "템플릿명" not in df.columns:
         return {"error": "필요한 '템플릿명' 컬럼이 없습니다."}, 500
 
-    # 템플릿 목록 및 alias_map 생성
     template_list = sorted(df["템플릿명"].dropna().unique().tolist())
     alias_map = build_alias_map(template_list)
-
-    # 키워드 해석
     tpl = resolve_keyword(raw, template_list, alias_map)
 
-    # 필터링 및 fallback 처리
     filtered = df[df["템플릿명"].astype(str) == tpl]
     if filtered.empty:
+        # 매칭 실패 시 에러로 처리하기 때문에 이 코드는 실행되지 않습니다.
         filtered = df[df["템플릿명"] == template_list[0]]
         used_tpl = template_list[0]
     else:
@@ -145,7 +149,6 @@ def create_xlsx():
 
     out_df = filtered[["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]]
 
-    # 스트리밍 Response
     def generate_xlsx():
         buffer = BytesIO()
         out_df.to_excel(buffer, index=False)
@@ -156,9 +159,11 @@ def create_xlsx():
                 break
             yield chunk
 
+    filename = f"{used_tpl}.xlsx"
+    disposition = "attachment; filename*=UTF-8''" + quote(filename)
     headers = {
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "Content-Disposition": f'attachment; filename="{used_tpl}.xlsx"',
+        "Content-Disposition": disposition,
         "Cache-Control": "public, max-age=3600"
     }
     return Response(generate_xlsx(), headers=headers)
