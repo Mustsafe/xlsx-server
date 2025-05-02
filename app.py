@@ -60,60 +60,66 @@ def build_alias_map(template_list: List[str]) -> dict:
     alias = {}
     for tpl in template_list:
         # 기본 매핑
-        alias[tpl] = tpl
-        alias[tpl.replace("_", " ")] = tpl
-        alias[tpl.replace(" ", "_")] = tpl
-        low = tpl.lower()
-        alias[low] = tpl
-        alias[low.replace("_", " ")] = tpl
-
-        base_space = tpl.replace("_", " ")
-        nospace = base_space.replace(" ", "").lower()
-        alias[nospace] = tpl
-
+        for form in {tpl,
+                     tpl.replace("_", " "),
+                     tpl.replace(" ", "_"),
+                     tpl.lower(),
+                     tpl.lower().replace("_", " "),
+                     tpl.lower().replace(" ", "_"),
+                     tpl.replace("_", " ").lower().replace(" ", ""),
+                     tpl.replace("_", " ").lower()
+                    }:
+            alias[form] = tpl
         # 다양한 접미사
+        base_space = tpl.replace("_", " ")
         for suf in [" 점검표", " 계획서", " 서식", " 표", " 양식", "_양식"]:
             combo = base_space + suf
             alias[combo] = tpl
             alias[combo.replace(" ", "_")] = tpl
             alias[combo.lower()] = tpl
 
-    # JSA·LOTO 범용 별칭 (대문자/소문자 모두 매핑)
+    # JSA·LOTO 범용 별칭
     for tpl in template_list:
-        norm = tpl.lower()
-        if "jsa" in norm:
-            for key in ["jsa", "JSA", "jsa양식", "JSA양식", "jsa 양식", "JSA 양식"]:
+        low = tpl.lower()
+        if "jsa" in low or "작업안전분석" in low:
+            for key in ["jsa", "JSA", "작업안전분석", "작업안전분석(jsa)", "jsa 양식", "JSA 양식"]:
                 alias[key] = tpl
-        if "loto" in norm:
-            for key in ["loto", "LOTO", "loto양식", "LOTO양식", "loto 양식", "LOTO 양식"]:
+        if "loto" in low:
+            for key in ["loto", "LOTO", "loto 실행 기록부", "LOTO 양식"]:
                 alias[key] = tpl
 
+    # 추가적으로, 모든 기존 키의 대문자 버전도 지원
+    for k in list(alias.keys()):
+        alias[k.upper()] = alias[k]
     return alias
 
 def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict) -> str:
     key = raw_keyword.strip()
-
-    # 0) 완전 일치 우선
+    # 0) 완전 일치 우선 (대소문자 무시)
     for tpl in template_list:
         if key.lower() == tpl.lower() or key.replace(" ", "").lower() == tpl.replace(" ", "").lower():
             return tpl
 
-    # 1) 토큰 기반 매칭
+    # 1) alias map
+    if key in alias_map:
+        return alias_map[key]
+    if key.lower() in alias_map:
+        return alias_map[key.lower()]
+    if key.upper() in alias_map:
+        return alias_map[key.upper()]
+
+    # 2) 토큰 기반 매칭
     tokens = [t.lower() for t in key.replace("_", " ").split(" ") if t]
     candidates = [tpl for tpl in template_list if all(tok in tpl.lower() for tok in tokens)]
     if len(candidates) == 1:
         return candidates[0]
 
-    # 2) alias map
-    if key in alias_map:
-        return alias_map[key]
-
     # 3) fuzzy match
     cleaned = key.replace(" ", "").replace("_", "").lower()
-    candidates_norm = [t.replace(" ", "").replace("_", "").lower() for t in template_list]
-    matches = difflib.get_close_matches(cleaned, candidates_norm, n=1, cutoff=0.6)
+    normed = [t.replace(" ", "").replace("_", "").lower() for t in template_list]
+    matches = difflib.get_close_matches(cleaned, normed, n=1, cutoff=0.6)
     if matches:
-        return template_list[candidates_norm.index(matches[0])]
+        return template_list[normed.index(matches[0])]
 
     # 4) no match → 에러 유도
     raise ValueError(f"템플릿 ‘{raw_keyword}’을(를) 찾을 수 없습니다. 정확한 이름을 입력해주세요.")
@@ -179,8 +185,7 @@ def list_templates():
         "alias_keys": sorted(alias_map.keys())
     })
 
-# 이하 뉴스 크롤링 유틸 및 엔드포인트 (생략 없이 전체)
-
+# 이하 뉴스 크롤링 유틸 및 엔드포인트 (기존 코드 그대로 유지)
 def fetch_safetynews_article_content(url):
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
