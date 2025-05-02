@@ -59,38 +59,33 @@ NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
 def build_alias_map(template_list: List[str]) -> dict:
     alias = {}
     for tpl in template_list:
-        # 기본 매핑
+        # 기본 매핑 (원형, 공백→언더, 언더→공백, 소문자, 무공백)
         alias[tpl] = tpl
         alias[tpl.replace("_", " ")] = tpl
         alias[tpl.replace(" ", "_")] = tpl
         low = tpl.lower()
         alias[low] = tpl
         alias[low.replace("_", " ")] = tpl
-
         base_space = tpl.replace("_", " ")
         nospace = base_space.replace(" ", "").lower()
         alias[nospace] = tpl
 
-        # 다양한 접미사
-        for suf in [" 점검표", " 계획서", " 서식", " 표", "양식", " 양식", "_양식"]:
+        # “양식” 등의 접미사
+        for suf in [" 점검표", " 계획서", " 서식", " 표", " 양식", "양식", "_양식"]:
             combo = base_space + suf
             alias[combo] = tpl
             alias[combo.replace(" ", "_")] = tpl
             alias[combo.lower()] = tpl
 
-    # JSA·LOTO 범용 별칭
+    # JSA·LOTO 전용 별칭 추가
     for tpl in template_list:
         norm = tpl.lower()
         if "jsa" in norm:
-            alias["jsa"] = tpl
-            alias["jsa양식"] = tpl
-            alias["jsa 양식"] = tpl
-            alias["작업안전분석(jsa)"] = tpl
+            for key in ["jsa", "jsa 양식", "jsa양식", "작업안전분석(jsa)"]:
+                alias[key] = tpl
         if "loto" in norm:
-            alias["loto"] = tpl
-            alias["loto양식"] = tpl
-            alias["loto 양식"] = tpl
-            alias["loto 실행 기록부"] = tpl
+            for key in ["loto", "loto 양식", "loto양식", "loto 실행 기록부"]:
+                alias[key] = tpl
 
     return alias
 
