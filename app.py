@@ -1,4 +1,4 @@
-from flask import Flask, request, send_file, jsonify, send_from_directory, Response
+from flask import Flask, request, jsonify, send_from_directory, Response
 import pandas as pd
 import os
 import requests
@@ -9,7 +9,6 @@ from dateutil import parser
 from datetime import datetime, timedelta
 from io import BytesIO
 from typing import List
-from itertools import product
 from urllib.parse import quote
 
 app = Flask(__name__)
@@ -20,8 +19,7 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # ./data 디렉토리 사용
 DATA_DIR = "./data"
-if not os.path.exists(DATA_DIR):
-    os.makedirs(DATA_DIR)
+os.makedirs(DATA_DIR, exist_ok=True)
 
 # --- 1. 헬스체크 엔드포인트 추가 ---
 @app.route("/health", methods=["GET"])
@@ -54,43 +52,42 @@ def serve_logo():
         mimetype="image/png"
     )
 
-# 네이버 오픈 API 자격증명
+# 네이버 오픈 API 자격증명 (뉴스 크롤링용)
 NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID")
 NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
 
 def build_alias_map(template_list: List[str]) -> dict:
-    """
-    template_list 에 있는 각 템플릿명에 대해
-    다양한 변형(alias)을 자동 생성하여 매핑 dict 를 반환합니다.
-    """
     alias = {}
     for tpl in template_list:
-        # 1) 원래 이름
         alias[tpl] = tpl
-        # 2) 언더스코어 ↔ 공백
         alias[tpl.replace("_", " ")] = tpl
         alias[tpl.replace(" ", "_")] = tpl
-        # 3) 소문자 버전
         low = tpl.lower()
         alias[low] = tpl
         alias[low.replace("_", " ")] = tpl
-        # 4) 주요 접미사 추가
+
         base_space = tpl.replace("_", " ")
+        nospace = base_space.replace(" ", "").lower()
+        alias[nospace] = tpl
+
         for suf in [" 점검표", " 계획서", " 서식", " 표"]:
             combo = base_space + suf
             alias[combo] = tpl
             alias[combo.replace(" ", "_")] = tpl
             alias[combo.lower()] = tpl
+
+    # JSA alias
+    if "업무별 JSA" in template_list:
+        alias["작업안전분석(JSA)"] = "업무별 JSA"
+        alias["작업안전분석JSA"] = "업무별 JSA"
+    # LOTO alias
+    if "LOTO 실행 기록부" in template_list:
+        alias["LOTO실행기록부"] = "LOTO 실행 기록부"
+        alias["loto실행기록부"] = "LOTO 실행 기록부"
+
     return alias
 
 def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict) -> str:
-    """
-    0) 완전 일치 우선 (대소문자 구분 없이)
-    1) 토큰 기반 매칭
-    2) alias_map 매핑
-    3) fuzzy 매칭
-    4) 매칭 실패 시 에러 유도
-    """
     key = raw_keyword.strip()
 
     # 0) 완전 일치 우선
@@ -108,7 +105,7 @@ def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict)
     if key in alias_map:
         return alias_map[key]
 
-    # 3) fuzzy match (언더스코어·공백 모두 제거)
+    # 3) fuzzy match
     cleaned = key.replace(" ", "").replace("_", "").lower()
     candidates_norm = [t.replace(" ", "").replace("_", "").lower() for t in template_list]
     matches = difflib.get_close_matches(cleaned, candidates_norm, n=1, cutoff=0.6)
@@ -123,30 +120,28 @@ def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict)
 def index():
     return "📰 사용 가능한 엔드포인트: /health, /daily_news, /render_news, /create_xlsx", 200
 
-# XLSX 생성 엔드포인트 (스트리밍 및 캐싱 헤더 추가)
+# XLSX 생성 엔드포인트
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
     raw = request.args.get("template", "")
     csv_path = os.path.join(DATA_DIR, "통합_노지파일.csv")
     if not os.path.exists(csv_path):
-        return {"error": "통합 CSV 파일이 없습니다."}, 404
+        return jsonify(error="통합 CSV 파일이 없습니다."), 404
 
     df = pd.read_csv(csv_path)
     if "템플릿명" not in df.columns:
-        return {"error": "필요한 '템플릿명' 컬럼이 없습니다."}, 500
+        return jsonify(error="필요한 '템플릿명' 컬럼이 없습니다."), 500
 
     template_list = sorted(df["템플릿명"].dropna().unique().tolist())
     alias_map = build_alias_map(template_list)
-    tpl = resolve_keyword(raw, template_list, alias_map)
 
-    filtered = df[df["템플릿명"].astype(str) == tpl]
-    if filtered.empty:
-        # 매칭 실패 시 에러로 처리하기 때문에 이 코드는 실행되지 않습니다.
-        filtered = df[df["템플릿명"] == template_list[0]]
-        used_tpl = template_list[0]
-    else:
-        used_tpl = tpl
+    # 키워드 해석 및 오류 처리
+    try:
+        tpl = resolve_keyword(raw, template_list, alias_map)
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
 
+    filtered = df[df["템플릿명"] == tpl]
     out_df = filtered[["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]]
 
     def generate_xlsx():
@@ -159,7 +154,7 @@ def create_xlsx():
                 break
             yield chunk
 
-    filename = f"{used_tpl}.xlsx"
+    filename = f"{tpl}.xlsx"
     disposition = "attachment; filename*=UTF-8''" + quote(filename)
     headers = {
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -168,7 +163,7 @@ def create_xlsx():
     }
     return Response(generate_xlsx(), headers=headers)
 
-# 이하 뉴스 크롤링 및 렌더 함수 (변경 없음)
+# 뉴스 크롤링 유틸
 def fetch_safetynews_article_content(url):
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -232,7 +227,7 @@ def crawl_safetynews():
 def get_daily_news():
     news = crawl_naver_news() + crawl_safetynews()
     if not news:
-        return jsonify({"error":"가져올 뉴스가 없습니다."}), 200
+        return jsonify(error="가져올 뉴스가 없습니다."), 200
     return jsonify(news)
 
 @app.route("/render_news", methods=["GET"])
@@ -249,9 +244,11 @@ def render_news():
             n["날짜"] = dt.strftime("%Y.%m.%d")
             filtered.append(n)
 
-    news_items = sorted(filtered, key=lambda x: parser.parse(x["날짜"]), reverse=True)[:3]
+    news_items = sorted(filtered,
+                        key=lambda x: parser.parse(x["날짜"]),
+                        reverse=True)[:3]
     if not news_items:
-        return jsonify({"error":"가져올 뉴스가 없습니다."}), 200
+        return jsonify(error="가져올 뉴스가 없습니다."), 200
 
     template_text = (
         "📌 산업 안전 및 보건 최신 뉴스\n"
@@ -272,7 +269,7 @@ def render_news():
         max_tokens=800,
         temperature=0.7
     )
-    return jsonify({"formatted_news": resp.choices[0].message.content})
+    return jsonify(formatted_news=resp.choices[0].message.content)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
