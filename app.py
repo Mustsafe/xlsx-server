@@ -1,4 +1,4 @@
-from flask import Flask, request, send_file, jsonify, send_from_directory
+from flask import Flask, request, send_file, jsonify, send_from_directory, Response
 import pandas as pd
 import os
 import requests
@@ -21,6 +21,11 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 DATA_DIR = "./data"
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
+
+# --- 1. 헬스체크 엔드포인트 추가 ---
+@app.route("/health", methods=["GET"])
+def health_check():
+    return "OK", 200
 
 # 플러그인 매니페스트 서빙
 @app.route("/.well-known/<path:filename>")
@@ -109,9 +114,9 @@ def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict)
 
 @app.route("/", methods=["GET"])
 def index():
-    return "📰 사용 가능한 엔드포인트: /daily_news, /render_news, /create_xlsx", 200
+    return "📰 사용 가능한 엔드포인트: /health, /daily_news, /render_news, /create_xlsx", 200
 
-# XLSX 생성 엔드포인트
+# XLSX 생성 엔드포인트 (스트리밍 및 캐싱 헤더 추가)
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
     raw = request.args.get("template", "")
@@ -133,25 +138,32 @@ def create_xlsx():
     # 필터링 및 fallback 처리
     filtered = df[df["템플릿명"].astype(str) == tpl]
     if filtered.empty:
-        default_tpl = template_list[0]
-        filtered = df[df["템플릿명"] == default_tpl]
-        used_tpl = default_tpl
+        filtered = df[df["템플릿명"] == template_list[0]]
+        used_tpl = template_list[0]
     else:
         used_tpl = tpl
 
     out_df = filtered[["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]]
-    output = BytesIO()
-    out_df.to_excel(output, index=False)
-    output.seek(0)
 
-    return send_file(
-        output,
-        as_attachment=True,
-        download_name=f"{used_tpl}.xlsx",
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    # 스트리밍 Response
+    def generate_xlsx():
+        buffer = BytesIO()
+        out_df.to_excel(buffer, index=False)
+        buffer.seek(0)
+        while True:
+            chunk = buffer.read(8192)
+            if not chunk:
+                break
+            yield chunk
 
-# 이하 뉴스 크롤링 및 렌더 함수 (수정 없음)
+    headers = {
+        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Disposition": f'attachment; filename="{used_tpl}.xlsx"',
+        "Cache-Control": "public, max-age=3600"
+    }
+    return Response(generate_xlsx(), headers=headers)
+
+# 이하 뉴스 크롤링 및 렌더 함수 (변경 없음)
 def fetch_safetynews_article_content(url):
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
