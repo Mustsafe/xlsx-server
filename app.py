@@ -59,7 +59,7 @@ NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
 def build_alias_map(template_list: List[str]) -> dict:
     alias = {}
     for tpl in template_list:
-        # 기본 매핑 (원형, 공백→언더, 언더→공백, 소문자, 무공백)
+        # 기본 매핑 (원형, 공백↔언더, 소문자, 무공백)
         alias[tpl] = tpl
         alias[tpl.replace("_", " ")] = tpl
         alias[tpl.replace(" ", "_")] = tpl
@@ -70,7 +70,7 @@ def build_alias_map(template_list: List[str]) -> dict:
         nospace = base_space.replace(" ", "").lower()
         alias[nospace] = tpl
 
-        # “양식” 등의 접미사
+        # 다양한 접미사 처리
         for suf in [" 점검표", " 계획서", " 서식", " 표", " 양식", "양식", "_양식"]:
             combo = base_space + suf
             alias[combo] = tpl
@@ -86,6 +86,10 @@ def build_alias_map(template_list: List[str]) -> dict:
         if "loto" in norm:
             for key in ["loto", "loto 양식", "loto양식", "loto 실행 기록부"]:
                 alias[key] = tpl
+
+    # 대소문자 입력 모두 지원: 기존 키의 대문자 버전도 추가
+    for k, v in list(alias.items()):
+        alias[k.upper()] = v
 
     return alias
 
@@ -162,7 +166,6 @@ def create_xlsx():
     }
     return Response(generate_xlsx(), headers=headers)
 
-# --- 디버깅용: 템플릿 목록 및 별칭 키 확인 ---
 @app.route("/list_templates", methods=["GET"])
 def list_templates():
     csv_path = os.path.join(DATA_DIR, "통합_노지파일.csv")
