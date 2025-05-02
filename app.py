@@ -72,29 +72,21 @@ def build_alias_map(template_list: List[str]) -> dict:
         alias[nospace] = tpl
 
         # 다양한 접미사
-        for suf in [" 점검표", " 계획서", " 서식", " 표", "양식", " 양식", "_양식"]:
+        for suf in [" 점검표", " 계획서", " 서식", " 표", " 양식", "_양식"]:
             combo = base_space + suf
             alias[combo] = tpl
             alias[combo.replace(" ", "_")] = tpl
             alias[combo.lower()] = tpl
 
-    # JSA·LOTO 범용 별칭
+    # JSA·LOTO 범용 별칭 (대문자/소문자 모두 매핑)
     for tpl in template_list:
         norm = tpl.lower()
         if "jsa" in norm:
-            alias["jsa"] = tpl
-            alias["jsa양식"] = tpl
-            alias["jsa 양식"] = tpl
-            alias["작업안전분석(jsa)"] = tpl
+            for key in ["jsa", "JSA", "jsa양식", "JSA양식", "jsa 양식", "JSA 양식"]:
+                alias[key] = tpl
         if "loto" in norm:
-            alias["loto"] = tpl
-            alias["loto양식"] = tpl
-            alias["loto 양식"] = tpl
-            alias["loto 실행 기록부"] = tpl
-
-    # 모든 alias 키에 대해 대문자 버전도 매핑
-    for key in list(alias.keys()):
-        alias[key.upper()] = alias[key]
+            for key in ["loto", "LOTO", "loto양식", "LOTO양식", "loto 양식", "LOTO 양식"]:
+                alias[key] = tpl
 
     return alias
 
@@ -171,6 +163,7 @@ def create_xlsx():
     }
     return Response(generate_xlsx(), headers=headers)
 
+# --- 디버깅용: 템플릿 목록 및 별칭 키 확인 ---
 @app.route("/list_templates", methods=["GET"])
 def list_templates():
     csv_path = os.path.join(DATA_DIR, "통합_노지파일.csv")
@@ -186,7 +179,8 @@ def list_templates():
         "alias_keys": sorted(alias_map.keys())
     })
 
-# 이하 뉴스 크롤링 유틸 및 엔드포인트 (기존 코드 그대로 유지)
+# 이하 뉴스 크롤링 유틸 및 엔드포인트 (생략 없이 전체)
+
 def fetch_safetynews_article_content(url):
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
