@@ -72,37 +72,29 @@ def build_alias_map(template_list: List[str]) -> dict:
         alias[nospace] = tpl
 
         # 다양한 접미사
-        for suf in [" 점검표", " 계획서", " 서식", " 표", " 양식", "_양식"]:
+        for suf in [" 점검표", " 계획서", " 서식", " 표", "양식", " 양식", "_양식"]:
             combo = base_space + suf
             alias[combo] = tpl
             alias[combo.replace(" ", "_")] = tpl
             alias[combo.lower()] = tpl
 
-    # JSA·LOTO 별칭 추가
+    # JSA·LOTO 범용 별칭
     for tpl in template_list:
         norm = tpl.lower()
         if "jsa" in norm:
-            # 소문자
             alias["jsa"] = tpl
-            alias["jsa 양식"] = tpl
             alias["jsa양식"] = tpl
-            alias["jsa 실행 기록부"] = tpl
-            # 대문자
-            alias["JSA"] = tpl
-            alias["JSA 양식"] = tpl
-            alias["JSA양식"] = tpl
-            alias["JSA 실행 기록부"] = tpl
+            alias["jsa 양식"] = tpl
+            alias["작업안전분석(jsa)"] = tpl
         if "loto" in norm:
-            # 소문자
             alias["loto"] = tpl
-            alias["loto 양식"] = tpl
             alias["loto양식"] = tpl
+            alias["loto 양식"] = tpl
             alias["loto 실행 기록부"] = tpl
-            # 대문자
-            alias["LOTO"] = tpl
-            alias["LOTO 양식"] = tpl
-            alias["LOTO양식"] = tpl
-            alias["LOTO 실행 기록부"] = tpl
+
+    # 모든 alias 키에 대해 대문자 버전도 매핑
+    for key in list(alias.keys()):
+        alias[key.upper()] = alias[key]
 
     return alias
 
@@ -179,7 +171,6 @@ def create_xlsx():
     }
     return Response(generate_xlsx(), headers=headers)
 
-# --- 디버깅용: 템플릿 목록 및 별칭 키 확인 ---
 @app.route("/list_templates", methods=["GET"])
 def list_templates():
     csv_path = os.path.join(DATA_DIR, "통합_노지파일.csv")
