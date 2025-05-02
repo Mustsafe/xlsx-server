@@ -59,42 +59,63 @@ NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
 def build_alias_map(template_list: List[str]) -> dict:
     alias = {}
     for tpl in template_list:
-        base = tpl.replace("_", " ")
-        low_tpl = tpl.lower()
-        # 기본 매핑 (원본·언더스코어·공백·소문자)
-        for key in {tpl, tpl.replace("_", " "), tpl.replace(" ", "_"), low_tpl, low_tpl.replace(" ", "_")}:
-            alias[key.lower()] = tpl
-        # 공백 제거 토큰
-        alias[low_tpl.replace(" ", "")] = tpl
+        # 기본 매핑
+        alias[tpl] = tpl
+        alias[tpl.replace("_", " ")] = tpl
+        alias[tpl.replace(" ", "_")] = tpl
+        low = tpl.lower()
+        alias[low] = tpl
+        alias[low.replace("_", " ")] = tpl
+
+        base_space = tpl.replace("_", " ")
+        nospace = base_space.replace(" ", "").lower()
+        alias[nospace] = tpl
 
         # 다양한 접미사
-        for suf in [" 점검표", " 계획서", " 서식", " 표", "양식", " 양식", "_양식"]:
-            combo = base + suf
+        for suf in [" 점검표", " 계획서", " 서식", " 표", " 양식", "_양식"]:
+            combo = base_space + suf
+            alias[combo] = tpl
+            alias[combo.replace(" ", "_")] = tpl
             alias[combo.lower()] = tpl
-            alias[combo.replace(" ", "_").lower()] = tpl
 
-    # JSA·LOTO 범용 별칭
+    # JSA·LOTO 별칭 추가
     for tpl in template_list:
-        low = tpl.lower()
-        if "jsa" in low:
-            for key in ["jsa", "jsa양식", "jsa 양식", "작업안전분석(jsa)"]:
-                alias[key.lower()] = tpl
-        if "loto" in low:
-            for key in ["loto", "loto양식", "loto 양식", "loto 실행 기록부"]:
-                alias[key.lower()] = tpl
+        norm = tpl.lower()
+        if "jsa" in norm:
+            # 소문자
+            alias["jsa"] = tpl
+            alias["jsa 양식"] = tpl
+            alias["jsa양식"] = tpl
+            alias["jsa 실행 기록부"] = tpl
+            # 대문자
+            alias["JSA"] = tpl
+            alias["JSA 양식"] = tpl
+            alias["JSA양식"] = tpl
+            alias["JSA 실행 기록부"] = tpl
+        if "loto" in norm:
+            # 소문자
+            alias["loto"] = tpl
+            alias["loto 양식"] = tpl
+            alias["loto양식"] = tpl
+            alias["loto 실행 기록부"] = tpl
+            # 대문자
+            alias["LOTO"] = tpl
+            alias["LOTO 양식"] = tpl
+            alias["LOTO양식"] = tpl
+            alias["LOTO 실행 기록부"] = tpl
 
     return alias
 
 def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict) -> str:
-    key = raw_keyword.strip().lower()
+    key = raw_keyword.strip()
 
     # 0) 완전 일치 우선
     for tpl in template_list:
-        if key == tpl.lower() or key.replace(" ", "") == tpl.replace(" ", "").lower():
+        if key.lower() == tpl.lower() or key.replace(" ", "").lower() == tpl.replace(" ", "").lower():
             return tpl
 
     # 1) 토큰 기반 매칭
-    tokens = [t for t in key.replace("_", " ").split(" ") if t]
+    tokens = [t.lower() for t in key.replace("_", " ").split(" ") if t]
     candidates = [tpl for tpl in template_list if all(tok in tpl.lower() for tok in tokens)]
     if len(candidates) == 1:
         return candidates[0]
@@ -104,7 +125,7 @@ def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict)
         return alias_map[key]
 
     # 3) fuzzy match
-    cleaned = key.replace(" ", "").replace("_", "")
+    cleaned = key.replace(" ", "").replace("_", "").lower()
     candidates_norm = [t.replace(" ", "").replace("_", "").lower() for t in template_list]
     matches = difflib.get_close_matches(cleaned, candidates_norm, n=1, cutoff=0.6)
     if matches:
@@ -158,6 +179,7 @@ def create_xlsx():
     }
     return Response(generate_xlsx(), headers=headers)
 
+# --- 디버깅용: 템플릿 목록 및 별칭 키 확인 ---
 @app.route("/list_templates", methods=["GET"])
 def list_templates():
     csv_path = os.path.join(DATA_DIR, "통합_노지파일.csv")
@@ -173,8 +195,7 @@ def list_templates():
         "alias_keys": sorted(alias_map.keys())
     })
 
-# --- 뉴스 크롤링 유틸 및 엔드포인트 ---
-
+# 이하 뉴스 크롤링 유틸 및 엔드포인트 (기존 코드 그대로 유지)
 def fetch_safetynews_article_content(url):
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
