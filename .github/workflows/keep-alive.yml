@@ -1,0 +1,14 @@
+name: Keep Render Alive
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'    # 매 5분마다
+  workflow_dispatch:         # 수동 실행 가능
+
+jobs:
+  ping-render:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /health endpoint
+        run: |
+          curl -fsS https://xlsx-server.onrender.com/health || exit 1
