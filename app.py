@@ -58,6 +58,8 @@ NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
 
 def build_alias_map(template_list: List[str]) -> dict:
     alias = {}
+    SUFFIXES = [" 점검표", " 계획서", " 서식", " 표", "양식", " 양식", "_양식"]
+
     for tpl in template_list:
         # 1) 기본 매핑
         alias[tpl] = tpl
@@ -73,7 +75,7 @@ def build_alias_map(template_list: List[str]) -> dict:
         alias[nospace] = tpl
 
         # 3) 다양한 접미사
-        for suf in [" 점검표", " 계획서", " 서식", " 표", "양식", " 양식", "_양식"]:
+        for suf in SUFFIXES:
             combo = base_space + suf
             alias[combo] = tpl
             alias[combo.replace(" ", "_")] = tpl
@@ -88,6 +90,7 @@ def build_alias_map(template_list: List[str]) -> dict:
                 for sep in ["", " ", "_"]:
                     key = b if sep == "" else f"{b}{sep}"
                     alias[key] = tpl
+                    alias[key.lower()] = tpl
                     alias[(key + "양식").lower()] = tpl
         if "loto" in norm:
             bases = ["LOTO", "loto", "실행기록부"]
@@ -95,11 +98,8 @@ def build_alias_map(template_list: List[str]) -> dict:
                 for sep in ["", " ", "_"]:
                     key = b if sep == "" else f"{b}{sep}"
                     alias[key] = tpl
+                    alias[key.lower()] = tpl
                     alias[(key + "양식").lower()] = tpl
-
-    # 5) — 여기에 도메인별 사용자 표현 추가(필요시) —
-    #    custom dict 를 완전히 없애고, 아래 substring 매칭으로 커버가능하므로
-    #    지금은 비워둡니다.
 
     return alias
 
@@ -114,12 +114,12 @@ def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict)
             return tpl
 
     # 1) 토큰 기반 매칭
-    tokens = [t for t in cleaned_key.split() if t]
+    tokens = [t for t in key_lower.replace("_", " ").split(" ") if t]
     candidates = [tpl for tpl in template_list if all(tok in tpl.lower() for tok in tokens)]
     if len(candidates) == 1:
         return candidates[0]
 
-    # 2) 부분 문자열 매칭 (핵심 키워드만 입력해도 매핑)
+    # 2) 부분 문자열 매칭
     substr_cands = [
         tpl for tpl in template_list
         if cleaned_key in tpl.replace(" ", "").replace("_", "").lower()
@@ -229,8 +229,7 @@ def crawl_naver_news():
             continue
         for item in resp.json().get("items", []):
             title = BeautifulSoup(item.get("title",""), "html.parser").get_text()
-            desc  = BeautifulSoup(item.get("description",""),
-                                  "html.parser").get_text()
+            desc  = BeautifulSoup(item.get("description",""), "html.parser").get_text()
             out.append({
                 "출처": item.get("originallink","네이버"),
                 "제목": title,
@@ -255,8 +254,7 @@ def crawl_safetynews():
             t    = item.select_one(".list-titles")
             href = base + t["href"] if t and t.get("href") else None
             d    = item.select_one(".list-dated")
-            content = (fetch_safetynews_article_content(href)
-                       if href else "")
+            content = fetch_safetynews_article_content(href) if href else ""
             out.append({
                 "출처": "안전신문",
                 "제목": t.get_text(strip=True) if t else "",
