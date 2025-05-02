@@ -83,23 +83,12 @@ def build_alias_map(template_list: List[str]) -> dict:
 
     # 4) JSA·LOTO 범용 별칭
     for tpl in template_list:
-        norm = tpl.lower()
+        norm = tpl.lower().replace(" ", "").replace("_", "")
         if "jsa" in norm or "작업안전분석" in norm:
-            bases = ["JSA", "jsa", "작업안전분석", "작업안전분석서"]
-            for b in bases:
-                for sep in ["", " ", "_"]:
-                    key = b if sep == "" else f"{b}{sep}"
-                    alias[key] = tpl
-                    alias[key.lower()] = tpl
-                    alias[(key + "양식").lower()] = tpl
+            # JSA 키워드가 raw에 포함되면 무조건 이 tpl을 리턴하도록
+            alias["__FORCE_JSA__"] = tpl
         if "loto" in norm:
-            bases = ["LOTO", "loto", "실행기록부"]
-            for b in bases:
-                for sep in ["", " ", "_"]:
-                    key = b if sep == "" else f"{b}{sep}"
-                    alias[key] = tpl
-                    alias[key.lower()] = tpl
-                    alias[(key + "양식").lower()] = tpl
+            alias["__FORCE_LOTO__"] = tpl
 
     return alias
 
@@ -107,6 +96,12 @@ def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict)
     key = raw_keyword.strip()
     key_lower = key.lower()
     cleaned_key = key_lower.replace(" ", "").replace("_", "")
+
+    # —— JSA/LOTO 최우선 매핑 예외 처리 —— 
+    if "__FORCE_JSA__" in alias_map and ("jsa" in cleaned_key or "작업안전분석" in cleaned_key):
+        return alias_map["__FORCE_JSA__"]
+    if "__FORCE_LOTO__" in alias_map and "loto" in cleaned_key:
+        return alias_map["__FORCE_LOTO__"]
 
     # 0) 완전 일치 우선
     for tpl in template_list:
@@ -313,4 +308,5 @@ def render_news():
     return jsonify(formatted_news=resp.choices[0].message.content)
 
 if __name__ == "__main__":
+    # PORT 환경 변수가 없다면 5000번 포트를 씁니다.
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
