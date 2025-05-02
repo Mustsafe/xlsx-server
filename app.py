@@ -12,7 +12,7 @@ from typing import List
 from urllib.parse import quote
 
 app = Flask(__name__)
-app.config['JSON_ASII'] = False  # 한글 깨짐 방지
+app.config['JSON_AS_ASCII'] = False  # 한글 깨짐 방지
 
 # 환경 변수에서 API 키 불러오기
 openai.api_key = os.getenv("OPENAI_API_KEY")
@@ -59,6 +59,7 @@ NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
 def build_alias_map(template_list: List[str]) -> dict:
     alias = {}
     for tpl in template_list:
+        # 기본 매핑
         alias[tpl] = tpl
         alias[tpl.replace("_", " ")] = tpl
         alias[tpl.replace(" ", "_")] = tpl
@@ -182,7 +183,7 @@ def list_templates():
         "alias_keys": sorted(alias_map.keys())
     })
 
-# 이하 뉴스 크롤링 및 렌더링 (기존과 동일)
+# 이하 뉴스 크롤링 유틸 및 엔드포인트 (기존 코드 그대로 유지)
 def fetch_safetynews_article_content(url):
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -223,7 +224,8 @@ def crawl_safetynews():
     keywords = ["건설 사고","추락 사고","끼임 사고","질식 사고","폭발 사고","산업재해","산업안전"]
     out = []
     for kw in keywords:
-        resp = requests.get(f"{base}/search/news?searchword={kw}", headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
+        resp = requests.get(f"{base}/search/news?searchword={kw}",
+                            headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
         if resp.status_code != 200:
             continue
         soup = BeautifulSoup(resp.text, "html.parser")
@@ -262,7 +264,9 @@ def render_news():
             n["날짜"] = dt.strftime("%Y.%m.%d")
             filtered.append(n)
 
-    news_items = sorted(filtered, key=lambda x: parser.parse(x["날짜"]), reverse=True)[:3]
+    news_items = sorted(filtered,
+                        key=lambda x: parser.parse(x["날짜"]),
+                        reverse=True)[:3]
     if not news_items:
         return jsonify(error="가져올 뉴스가 없습니다."), 200
 
@@ -273,8 +277,12 @@ def render_news():
         "🔎 {recommendation}\n"
         "👉 요약 제공됨 · “뉴스 더 보여줘” 입력 시 유사 사례 추가 확인 가능"
     )
-    system_message = {"role":"system","content":f"다음 JSON 형식의 뉴스 목록을 아래 템플릿에 맞춰 출력하세요.\n템플릿:\n{template_text}"}
+    system_message = {
+        "role":"system",
+        "content":f"다음 JSON 형식의 뉴스 목록을 아래 템플릿에 맞춰 출력하세요.\n템플릿:\n{template_text}"
+    }
     user_message = {"role":"user","content":str(news_items)}
+
     resp = openai.ChatCompletion.create(
         model="gpt-4o-mini",
         messages=[system_message, user_message],
