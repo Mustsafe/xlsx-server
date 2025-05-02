@@ -59,50 +59,42 @@ NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
 def build_alias_map(template_list: List[str]) -> dict:
     alias = {}
     for tpl in template_list:
-        # 기본 매핑 (원형, 공백↔언더, 소문자, 무공백)
-        alias[tpl] = tpl
-        alias[tpl.replace("_", " ")] = tpl
-        alias[tpl.replace(" ", "_")] = tpl
-        low = tpl.lower()
-        alias[low] = tpl
-        alias[low.replace("_", " ")] = tpl
-        base_space = tpl.replace("_", " ")
-        nospace = base_space.replace(" ", "").lower()
-        alias[nospace] = tpl
+        base = tpl.replace("_", " ")
+        low_tpl = tpl.lower()
+        # 기본 매핑 (원본·언더스코어·공백·소문자)
+        for key in {tpl, tpl.replace("_", " "), tpl.replace(" ", "_"), low_tpl, low_tpl.replace(" ", "_")}:
+            alias[key.lower()] = tpl
+        # 공백 제거 토큰
+        alias[low_tpl.replace(" ", "")] = tpl
 
-        # 다양한 접미사 처리
-        for suf in [" 점검표", " 계획서", " 서식", " 표", " 양식", "양식", "_양식"]:
-            combo = base_space + suf
-            alias[combo] = tpl
-            alias[combo.replace(" ", "_")] = tpl
+        # 다양한 접미사
+        for suf in [" 점검표", " 계획서", " 서식", " 표", "양식", " 양식", "_양식"]:
+            combo = base + suf
             alias[combo.lower()] = tpl
+            alias[combo.replace(" ", "_").lower()] = tpl
 
-    # JSA·LOTO 전용 별칭 추가
+    # JSA·LOTO 범용 별칭
     for tpl in template_list:
-        norm = tpl.lower()
-        if "jsa" in norm:
-            for key in ["jsa", "jsa 양식", "jsa양식", "작업안전분석(jsa)"]:
-                alias[key] = tpl
-        if "loto" in norm:
-            for key in ["loto", "loto 양식", "loto양식", "loto 실행 기록부"]:
-                alias[key] = tpl
-
-    # 대소문자 입력 모두 지원: 기존 키의 대문자 버전도 추가
-    for k, v in list(alias.items()):
-        alias[k.upper()] = v
+        low = tpl.lower()
+        if "jsa" in low:
+            for key in ["jsa", "jsa양식", "jsa 양식", "작업안전분석(jsa)"]:
+                alias[key.lower()] = tpl
+        if "loto" in low:
+            for key in ["loto", "loto양식", "loto 양식", "loto 실행 기록부"]:
+                alias[key.lower()] = tpl
 
     return alias
 
 def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict) -> str:
-    key = raw_keyword.strip()
+    key = raw_keyword.strip().lower()
 
     # 0) 완전 일치 우선
     for tpl in template_list:
-        if key.lower() == tpl.lower() or key.replace(" ", "").lower() == tpl.replace(" ", "").lower():
+        if key == tpl.lower() or key.replace(" ", "") == tpl.replace(" ", "").lower():
             return tpl
 
     # 1) 토큰 기반 매칭
-    tokens = [t.lower() for t in key.replace("_", " ").split(" ") if t]
+    tokens = [t for t in key.replace("_", " ").split(" ") if t]
     candidates = [tpl for tpl in template_list if all(tok in tpl.lower() for tok in tokens)]
     if len(candidates) == 1:
         return candidates[0]
@@ -112,7 +104,7 @@ def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict)
         return alias_map[key]
 
     # 3) fuzzy match
-    cleaned = key.replace(" ", "").replace("_", "").lower()
+    cleaned = key.replace(" ", "").replace("_", "")
     candidates_norm = [t.replace(" ", "").replace("_", "").lower() for t in template_list]
     matches = difflib.get_close_matches(cleaned, candidates_norm, n=1, cutoff=0.6)
     if matches:
@@ -181,7 +173,8 @@ def list_templates():
         "alias_keys": sorted(alias_map.keys())
     })
 
-# 이하 뉴스 크롤링 유틸 및 엔드포인트 (기존 코드 그대로 유지)
+# --- 뉴스 크롤링 유틸 및 엔드포인트 ---
+
 def fetch_safetynews_article_content(url):
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
