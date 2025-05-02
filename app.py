@@ -56,6 +56,7 @@ def serve_logo():
 NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID")
 NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
 
+
 def build_alias_map(template_list: List[str]) -> dict:
     alias = {}
     SUFFIXES = [" 점검표", " 계획서", " 서식", " 표", "양식", " 양식", "_양식"]
@@ -81,16 +82,16 @@ def build_alias_map(template_list: List[str]) -> dict:
             alias[combo.replace(" ", "_")] = tpl
             alias[combo.lower()] = tpl
 
-    # 4) JSA·LOTO 범용 별칭
+    # 4) JSA·LOTO 최우선 매핑
     for tpl in template_list:
         norm = tpl.lower().replace(" ", "").replace("_", "")
         if "jsa" in norm or "작업안전분석" in norm:
-            # JSA 키워드가 raw에 포함되면 무조건 이 tpl을 리턴하도록
             alias["__FORCE_JSA__"] = tpl
         if "loto" in norm:
             alias["__FORCE_LOTO__"] = tpl
 
     return alias
+
 
 def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict) -> str:
     key = raw_keyword.strip()
@@ -137,9 +138,11 @@ def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict)
     # 5) 매칭 실패 → 에러
     raise ValueError(f"템플릿 ‘{raw_keyword}’을(를) 찾을 수 없습니다. 정확한 이름을 입력해주세요.")
 
+
 @app.route("/", methods=["GET"])
 def index():
     return "📰 사용 가능한 엔드포인트: /health, /daily_news, /render_news, /create_xlsx, /list_templates", 200
+
 
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
@@ -182,6 +185,7 @@ def create_xlsx():
     }
     return Response(generate_xlsx(), headers=headers)
 
+
 # --- 디버깅용: 템플릿 & 별칭 확인 ---
 @app.route("/list_templates", methods=["GET"])
 def list_templates():
@@ -197,6 +201,7 @@ def list_templates():
         "alias_keys":    sorted(alias_map.keys())
     })
 
+
 # --- 뉴스 크롤링 유틸 및 엔드포인트 (기존 코드 그대로 유지) ---
 def fetch_safetynews_article_content(url):
     try:
@@ -207,6 +212,7 @@ def fetch_safetynews_article_content(url):
         return node.get_text("\n").strip() if node else "(본문 수집 실패)"
     except:
         return "(본문 수집 실패)"
+
 
 def crawl_naver_news():
     base_url = "https://openapi.naver.com/v1/search/news.json"
@@ -234,6 +240,7 @@ def crawl_naver_news():
             })
     return out
 
+
 def crawl_safetynews():
     base     = "https://www.safetynews.co.kr"
     keywords = ["건설 사고","추락 사고","끼임 사고","질식 사고",
@@ -259,12 +266,14 @@ def crawl_safetynews():
             })
     return out
 
+
 @app.route("/daily_news", methods=["GET"])
 def get_daily_news():
     news = crawl_naver_news() + crawl_safetynews()
     if not news:
         return jsonify(error="가져올 뉴스가 없습니다."), 200
     return jsonify(news)
+
 
 @app.route("/render_news", methods=["GET"])
 def render_news():
@@ -306,6 +315,7 @@ def render_news():
         temperature=0.7
     )
     return jsonify(formatted_news=resp.choices[0].message.content)
+
 
 if __name__ == "__main__":
     # PORT 환경 변수가 없다면 5000번 포트를 씁니다.
