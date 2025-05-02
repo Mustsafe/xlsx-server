@@ -1,4 +1,3 @@
-
 from flask import Flask, request, jsonify, send_from_directory, Response
 import pandas as pd
 import os
@@ -71,40 +70,54 @@ def build_alias_map(template_list: List[str]) -> dict:
         nospace = base_space.replace(" ", "").lower()
         alias[nospace] = tpl
 
-        for suf in [" 점검표", " 계획서", " 서식", " 표"]:
+        for suf in [" 점검표", " 계획서", " 서식", " 표", "양식", " 양식", "_양식"]:
             combo = base_space + suf
             alias[combo] = tpl
             alias[combo.replace(" ", "_")] = tpl
             alias[combo.lower()] = tpl
 
-        for form_suf in ["양식", " 양식", "_양식"]:
-            combo = base_space + form_suf
-            alias[combo] = tpl
-            alias[combo.replace(" ", "_")] = tpl
-            alias[combo.lower()] = tpl
+    # General acronym‐based aliases
+    for tpl in template_list:
+        norm = tpl.lower()
+        if "jsa" in norm:
+            alias["jsa"] = tpl
+            alias["jsa양식"] = tpl
+            alias["jsa 양식"] = tpl
+            alias["작업안전분석(jsa)"] = tpl
+        if "loto" in norm:
+            alias["loto"] = tpl
+            alias["loto양식"] = tpl
+            alias["loto 양식"] = tpl
+            alias["loto 실행 기록부"] = tpl
 
     return alias
 
 def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict) -> str:
     key = raw_keyword.strip()
+
+    # 0) 완전 일치 우선
     for tpl in template_list:
         if key.lower() == tpl.lower() or key.replace(" ", "").lower() == tpl.replace(" ", "").lower():
             return tpl
 
+    # 1) 토큰 기반 매칭 (소문자 비교)
     tokens = [t.lower() for t in key.replace("_", " ").split(" ") if t]
     candidates = [tpl for tpl in template_list if all(tok in tpl.lower() for tok in tokens)]
     if len(candidates) == 1:
         return candidates[0]
 
+    # 2) alias 맵
     if key in alias_map:
         return alias_map[key]
 
+    # 3) fuzzy match
     cleaned = key.replace(" ", "").replace("_", "").lower()
     candidates_norm = [t.replace(" ", "").replace("_", "").lower() for t in template_list]
     matches = difflib.get_close_matches(cleaned, candidates_norm, n=1, cutoff=0.6)
     if matches:
         return template_list[candidates_norm.index(matches[0])]
 
+    # 4) no match → 에러 유도
     raise ValueError(f"템플릿 ‘{raw_keyword}’을(를) 찾을 수 없습니다. 정확한 이름을 입력해주세요.")
 
 @app.route("/", methods=["GET"])
@@ -152,6 +165,8 @@ def create_xlsx():
     }
     return Response(generate_xlsx(), headers=headers)
 
+# --- 이하 뉴스 크롤링 유틸 및 엔드포인트 ---
+
 def fetch_safetynews_article_content(url):
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -192,15 +207,14 @@ def crawl_safetynews():
     keywords = ["건설 사고","추락 사고","끼임 사고","질식 사고","폭발 사고","산업재해","산업안전"]
     out = []
     for kw in keywords:
-        resp = requests.get(f"{base}/search/news?searchword={kw}",
-                            headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
+        resp = requests.get(f"{base}/search/news?searchword={kw}", headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
         if resp.status_code != 200:
             continue
         soup = BeautifulSoup(resp.text, "html.parser")
         for item in soup.select(".article-list-content")[:2]:
             t = item.select_one(".list-titles")
             href = base + t["href"] if t and t.get("href") else None
-            d   = item.select_one(".list-dated")
+            d = item.select_one(".list-dated")
             content = fetch_safetynews_article_content(href) if href else ""
             out.append({
                 "출처": "안전신문",
@@ -231,9 +245,12 @@ def render_news():
         if dt >= cutoff:
             n["날짜"] = dt.strftime("%Y.%m.%d")
             filtered.append(n)
-    news_items = sorted(filtered, key=lambda x: parser.parse(x["날짜"]), reverse=True)[:3] 
+
+    news_items = sorted(filtered, key=lambda x: parser.parse(x["날짜"]), reverse=True)[:3]
     if not news_items:
         return jsonify(error="가져올 뉴스가 없습니다."), 200
+
+    # ← 여기를 원래의 풍부한 템플릿으로 복원
     template_text = (
         "📌 산업 안전 및 보건 최신 뉴스\n"
         "📰 “{title}” ({date}, {source})\n\n"
@@ -241,8 +258,12 @@ def render_news():
         "🔎 {recommendation}\n"
         "👉 요약 제공됨 · “뉴스 더 보여줘” 입력 시 유사 사례 추가 확인 가능"
     )
-    system_message = {"role":"system","content":f"다음 JSON 형식의 뉴스 목록을 아래 템플릿에 맞춰 출력하세요.\n템플릿:\n{template_text}"}
-    user_message = {"role":"user","content":str(news_items)}
+    system_message = {
+        "role": "system",
+        "content": f"다음 JSON 형식의 뉴스 목록을 아래 템플릿에 맞춰 출력하세요.\n템플릿:\n{template_text}"
+    }
+    user_message = {"role": "user", "content": str(news_items)}
+
     resp = openai.ChatCompletion.create(
         model="gpt-4o-mini",
         messages=[system_message, user_message],
