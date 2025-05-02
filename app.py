@@ -1,3 +1,4 @@
+
 from flask import Flask, request, jsonify, send_from_directory, Response
 import pandas as pd
 import os
@@ -21,7 +22,7 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 DATA_DIR = "./data"
 os.makedirs(DATA_DIR, exist_ok=True)
 
-# --- 1. 헬스체크 엔드포인트 추가 ---
+# 1. 헬스체크 엔드포인트
 @app.route("/health", methods=["GET"])
 def health_check():
     return "OK", 200
@@ -52,7 +53,7 @@ def serve_logo():
         mimetype="image/png"
     )
 
-# 네이버 오픈 API 자격증명 (뉴스 크롤링용)
+# 네이버 API 자격증명 (뉴스 크롤링용)
 NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID")
 NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
 
@@ -80,10 +81,15 @@ def build_alias_map(template_list: List[str]) -> dict:
     if "업무별 JSA" in template_list:
         alias["작업안전분석(JSA)"] = "업무별 JSA"
         alias["작업안전분석JSA"] = "업무별 JSA"
+        alias["jsa"] = "업무별 JSA"
+
     # LOTO alias
     if "LOTO 실행 기록부" in template_list:
         alias["LOTO실행기록부"] = "LOTO 실행 기록부"
         alias["loto실행기록부"] = "LOTO 실행 기록부"
+        alias["loto"] = "LOTO 실행 기록부"
+        alias["loto 기록부"] = "LOTO 실행 기록부"
+        alias["loto 기록"] = "LOTO 실행 기록부"
 
     return alias
 
@@ -95,9 +101,12 @@ def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict)
         if key.lower() == tpl.lower() or key.replace(" ", "").lower() == tpl.replace(" ", "").lower():
             return tpl
 
-    # 1) 토큰 기반 매칭
-    tokens = [t for t in key.replace("_", " ").split(" ") if t]
-    candidates = [tpl for tpl in template_list if all(tok in tpl for tok in tokens)]
+    # 1) 토큰 기반 매칭 (소문자 비교)
+    tokens = [t.lower() for t in key.replace("_", " ").split(" ") if t]
+    candidates = [
+        tpl for tpl in template_list
+        if all(tok in tpl.lower() for tok in tokens)
+    ]
     if len(candidates) == 1:
         return candidates[0]
 
@@ -110,8 +119,7 @@ def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict)
     candidates_norm = [t.replace(" ", "").replace("_", "").lower() for t in template_list]
     matches = difflib.get_close_matches(cleaned, candidates_norm, n=1, cutoff=0.6)
     if matches:
-        idx = candidates_norm.index(matches[0])
-        return template_list[idx]
+        return template_list[candidates_norm.index(matches[0])]
 
     # 4) no match → 에러 유도
     raise ValueError(f"템플릿 ‘{raw_keyword}’을(를) 찾을 수 없습니다. 정확한 이름을 입력해주세요.")
@@ -120,7 +128,6 @@ def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict)
 def index():
     return "📰 사용 가능한 엔드포인트: /health, /daily_news, /render_news, /create_xlsx", 200
 
-# XLSX 생성 엔드포인트
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
     raw = request.args.get("template", "")
@@ -135,7 +142,6 @@ def create_xlsx():
     template_list = sorted(df["템플릿명"].dropna().unique().tolist())
     alias_map = build_alias_map(template_list)
 
-    # 키워드 해석 및 오류 처리
     try:
         tpl = resolve_keyword(raw, template_list, alias_map)
     except ValueError as e:
@@ -148,8 +154,7 @@ def create_xlsx():
         buffer = BytesIO()
         out_df.to_excel(buffer, index=False)
         buffer.seek(0)
-        while True:
-            chunk = buffer.read(8192)
+        while chunk := buffer.read(8192):
             if not chunk:
                 break
             yield chunk
@@ -163,7 +168,7 @@ def create_xlsx():
     }
     return Response(generate_xlsx(), headers=headers)
 
-# 뉴스 크롤링 유틸
+# 이하 뉴스 크롤링 및 렌더링
 def fetch_safetynews_article_content(url):
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -189,7 +194,7 @@ def crawl_naver_news():
             continue
         for item in resp.json().get("items", []):
             title = BeautifulSoup(item.get("title",""), "html.parser").get_text()
-            desc  = BeautifulSoup(item.get("description",""), "html.parser").get_text()
+            desc = BeautifulSoup(item.get("description",""), "html.parser").get_text()
             out.append({
                 "출처": item.get("originallink","네이버"),
                 "제목": title,
@@ -210,9 +215,9 @@ def crawl_safetynews():
             continue
         soup = BeautifulSoup(resp.text, "html.parser")
         for item in soup.select(".article-list-content")[:2]:
-            t    = item.select_one(".list-titles")
+            t = item.select_one(".list-titles")
             href = base + t["href"] if t and t.get("href") else None
-            d    = item.select_one(".list-dated")
+            d = item.select_one(".list-dated")
             content = fetch_safetynews_article_content(href) if href else ""
             out.append({
                 "출처": "안전신문",
@@ -232,7 +237,7 @@ def get_daily_news():
 
 @app.route("/render_news", methods=["GET"])
 def render_news():
-    raw    = crawl_naver_news() + crawl_safetynews()
+    raw = crawl_naver_news() + crawl_safetynews()
     cutoff = datetime.utcnow() - timedelta(days=3)
     filtered = []
     for n in raw:
@@ -244,9 +249,7 @@ def render_news():
             n["날짜"] = dt.strftime("%Y.%m.%d")
             filtered.append(n)
 
-    news_items = sorted(filtered,
-                        key=lambda x: parser.parse(x["날짜"]),
-                        reverse=True)[:3]
+    news_items = sorted(filtered, key=lambda x: parser.parse(x["날짜"]), reverse=True)[:3]
     if not news_items:
         return jsonify(error="가져올 뉴스가 없습니다."), 200
 
@@ -258,10 +261,10 @@ def render_news():
         "👉 요약 제공됨 · “뉴스 더 보여줘” 입력 시 유사 사례 추가 확인 가능"
     )
     system_message = {
-        "role":"system",
-        "content":f"다음 JSON 형식의 뉴스 목록을 아래 템플릿에 맞춰 출력하세요.\n템플릿:\n{template_text}"
+        "role": "system",
+        "content": f"다음 JSON 형식의 뉴스 목록을 아래 템플릿에 맞춰 출력하세요.\n템플릿:\n{template_text}"
     }
-    user_message = {"role":"user","content":str(news_items)}
+    user_message = {"role": "user", "content": str(news_items)}
 
     resp = openai.ChatCompletion.create(
         model="gpt-4o-mini",
