@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from io import BytesIO
 from typing import List
 from urllib.parse import quote
+import re  # <— 추가
 
 app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False  # 한글 깨짐 방지
@@ -56,82 +57,90 @@ def serve_logo():
 NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID")
 NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
 
+def normalize(text: str) -> str:
+    """소문자 변환 후 영숫자만 남겨 키 형태로 사용"""
+    return re.sub(r'[^0-9a-z]', '', text.lower())
+
 def build_alias_map(template_list: List[str]) -> dict:
     alias = {}
     for tpl in template_list:
-        # 기본 매핑
+        # 1) 원본, 공백/언더스코어 치환, 소문자, 공백제거
         alias[tpl] = tpl
         alias[tpl.replace("_", " ")] = tpl
         alias[tpl.replace(" ", "_")] = tpl
-        low = tpl.lower()
-        alias[low] = tpl
-        alias[low.replace("_", " ")] = tpl
+        alias[tpl.lower()] = tpl
+        alias[tpl.replace(" ", "").lower()] = tpl
 
-        base_space = tpl.replace("_", " ")
-        nospace = base_space.replace(" ", "").lower()
-        alias[nospace] = tpl
+        # 2) 다양한 접미사
+        base = tpl.replace("_", " ")
+        for suf in [" 점검표", " 계획서", " 서식", " 표", " 양식", "_양식"]:
+            alias[(base + suf)] = tpl
+            alias[(base + suf).lower()] = tpl
+            alias[(base + suf).replace(" ", "_")] = tpl
 
-        # 다양한 접미사
-        for suf in [" 점검표", " 계획서", " 서식", " 표", "양식", " 양식", "_양식"]:
-            combo = base_space + suf
-            alias[combo] = tpl
-            alias[combo.replace(" ", "_")] = tpl
-            alias[combo.lower()] = tpl
-
-    # JSA·LOTO 범용 별칭
+    # 3) JSA·LOTO 범용 별칭
     for tpl in template_list:
-        norm = tpl.lower()
-        if "jsa" in norm or "작업안전분석" in norm:
+        low = tpl.lower()
+        if "jsa" in low or "작업안전분석" in low:
             for key in ["JSA", "jsa", "JSA 양식", "jsa 양식", "작업안전분석", "작업안전분석 양식"]:
                 alias[key] = tpl
                 alias[key.lower()] = tpl
-        if "loto" in norm:
+        if "loto" in low:
             for key in ["LOTO", "loto", "LOTO 양식", "loto 양식", "loto 실행 기록부"]:
                 alias[key] = tpl
                 alias[key.lower()] = tpl
 
-    # — 여기에 도메인별 사용자 표현 추가 —
+    # 4) 도메인별 자주 쓰는 표현 매핑
     custom = {
-        # key: 사용자가 자주 쓰는 표현, value: CSV상의 실제 템플릿명
         "비계작업":           "비계 설치계획서",
         "비계작업 양식":      "비계 설치계획서",
         "비계 작업 기본양식": "비계 설치계획서",
-        "비계 작업 서식":     "비계 설치계획서",
-        # 필요하다면 더 추가…
+        # 여기에 추가...
     }
     for k, v in custom.items():
         alias[k] = v
         alias[k.lower()] = v
         alias[k.upper()] = v
 
+    # 5) 템플릿명 자체의 normalized 키
+    for tpl in template_list:
+        alias[ normalize(tpl) ] = tpl
+
     return alias
 
 def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict) -> str:
     key = raw_keyword.strip()
+    low = key.lower()
 
-    # 0) 완전 일치 우선
+    # 0) 완전 일치 (공백·언더스코어 무시)
     for tpl in template_list:
-        if key.lower() == tpl.lower() or key.replace(" ", "").lower() == tpl.replace(" ", "").lower():
+        if low == tpl.lower() or low.replace(" ", "") == tpl.lower().replace(" ", ""):
             return tpl
 
-    # 1) 토큰 기반 매칭
-    tokens = [t.lower() for t in key.replace("_", " ").split(" ") if t]
-    candidates = [tpl for tpl in template_list if all(tok in tpl.lower() for tok in tokens)]
-    if len(candidates) == 1:
-        return candidates[0]
+    # 1) token 매칭
+    tokens = [t for t in re.split(r'[\s_]+', low) if t]
+    cands = [tpl for tpl in template_list if all(tok in tpl.lower() for tok in tokens)]
+    if len(cands) == 1:
+        return cands[0]
 
-    # 2) alias map
+    # 2) alias_map 직접 참조
     if key in alias_map:
         return alias_map[key]
+    if low in alias_map:
+        return alias_map[low]
 
-    # 3) fuzzy match
-    cleaned = key.replace(" ", "").replace("_", "").lower()
-    candidates_norm = [t.replace(" ", "").replace("_", "").lower() for t in template_list]
-    matches = difflib.get_close_matches(cleaned, candidates_norm, n=1, cutoff=0.6)
-    if matches:
-        return template_list[candidates_norm.index(matches[0])]
+    # 3) normalized form
+    norm = normalize(key)
+    if norm in alias_map:
+        return alias_map[norm]
 
-    # 4) no match → 에러 유도
+    # 4) fuzzy match on normalized
+    tpl_norms = [normalize(t) for t in template_list]
+    match = difflib.get_close_matches(norm, tpl_norms, n=1, cutoff=0.6)
+    if match:
+        return template_list[tpl_norms.index(match[0])]
+
+    # 5) 못 찾음
     raise ValueError(f"템플릿 ‘{raw_keyword}’을(를) 찾을 수 없습니다. 정확한 이름을 입력해주세요.")
 
 @app.route("/", methods=["GET"])
