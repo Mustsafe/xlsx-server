@@ -59,7 +59,7 @@ NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
 def build_alias_map(template_list: List[str]) -> dict:
     alias = {}
     for tpl in template_list:
-        # 1) 기본 매핑: 원본, 언더바/공백 치환, 소문자
+        # 1) 기본 매핑
         alias[tpl] = tpl
         alias[tpl.replace("_", " ")] = tpl
         alias[tpl.replace(" ", "_")] = tpl
@@ -67,12 +67,12 @@ def build_alias_map(template_list: List[str]) -> dict:
         alias[low] = tpl
         alias[low.replace("_", " ")] = tpl
 
-        # 2) 띄어쓰기 없이 붙여쓴 키
+        # 2) 공백 제거 버전
         base_space = tpl.replace("_", " ")
         nospace = base_space.replace(" ", "").lower()
         alias[nospace] = tpl
 
-        # 3) 다양한 접미사 자동 생성
+        # 3) 다양한 접미사
         for suf in [" 점검표", " 계획서", " 서식", " 표", "양식", " 양식", "_양식"]:
             combo = base_space + suf
             alias[combo] = tpl
@@ -83,62 +83,63 @@ def build_alias_map(template_list: List[str]) -> dict:
     for tpl in template_list:
         norm = tpl.lower()
         if "jsa" in norm or "작업안전분석" in norm:
-            for key in ["JSA", "jsa", "JSA 양식", "jsa 양식", "작업안전분석", "작업안전분석 양식"]:
-                alias[key] = tpl
-                alias[key.lower()] = tpl
+            bases = ["JSA", "jsa", "작업안전분석", "작업안전분석서"]
+            for b in bases:
+                for sep in ["", " ", "_"]:
+                    key = b if sep == "" else f"{b}{sep}"
+                    alias[key] = tpl
+                    alias[(key + "양식").lower()] = tpl
         if "loto" in norm:
-            for key in ["LOTO", "loto", "LOTO 양식", "loto 양식", "loto 실행 기록부"]:
-                alias[key] = tpl
-                alias[key.lower()] = tpl
+            bases = ["LOTO", "loto", "실행기록부"]
+            for b in bases:
+                for sep in ["", " ", "_"]:
+                    key = b if sep == "" else f"{b}{sep}"
+                    alias[key] = tpl
+                    alias[(key + "양식").lower()] = tpl
 
-    # 5) 도메인별 사용자 표현 (예: 비계, 필요시 추가)
-    custom = {
-        "비계작업":            "비계 설치계획서",
-        "비계작업 양식":       "비계 설치계획서",
-        "비계 작업 기본양식":  "비계 설치계획서",
-        "비계 작업 서식":      "비계 설치계획서",
-        # …더 추가 가능…
-    }
-    for k, v in custom.items():
-        alias[k] = v
-        alias[k.lower()] = v
-        alias[k.upper()] = v
-
-    # 6) **동사(전달/보내줘/주세요/줘/부탁해)** 변형 자동 생성
-    verbs = ["전달", "보내줘", "주세요", "줘", "부탁해"]
-    for key, val in list(alias.items()):
-        for verb in verbs:
-            alias[f"{key} {verb}"] = val
-            alias[f"{key}{verb}"] = val
+    # 5) — 여기에 도메인별 사용자 표현 추가(필요시) —
+    #    custom dict 를 완전히 없애고, 아래 substring 매칭으로 커버가능하므로
+    #    지금은 비워둡니다.
 
     return alias
 
 def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict) -> str:
     key = raw_keyword.strip()
+    key_lower = key.lower()
+    cleaned_key = key_lower.replace(" ", "").replace("_", "")
 
     # 0) 완전 일치 우선
     for tpl in template_list:
-        if key.lower() == tpl.lower() or key.replace(" ", "").lower() == tpl.replace(" ", "").lower():
+        if key_lower == tpl.lower() or cleaned_key == tpl.replace(" ", "").replace("_", "").lower():
             return tpl
 
     # 1) 토큰 기반 매칭
-    tokens = [t.lower() for t in key.replace("_", " ").split(" ") if t]
+    tokens = [t for t in cleaned_key.split() if t]
     candidates = [tpl for tpl in template_list if all(tok in tpl.lower() for tok in tokens)]
     if len(candidates) == 1:
         return candidates[0]
 
-    # 2) alias map
+    # 2) 부분 문자열 매칭 (핵심 키워드만 입력해도 매핑)
+    substr_cands = [
+        tpl for tpl in template_list
+        if cleaned_key in tpl.replace(" ", "").replace("_", "").lower()
+    ]
+    if len(substr_cands) == 1:
+        return substr_cands[0]
+
+    # 3) alias map
     if key in alias_map:
         return alias_map[key]
+    if key_lower in alias_map:
+        return alias_map[key_lower]
 
-    # 3) fuzzy match
-    cleaned = key.replace(" ", "").replace("_", "").lower()
+    # 4) fuzzy match
     candidates_norm = [t.replace(" ", "").replace("_", "").lower() for t in template_list]
-    matches = difflib.get_close_matches(cleaned, candidates_norm, n=1, cutoff=0.6)
+    matches = difflib.get_close_matches(cleaned_key, candidates_norm, n=1, cutoff=0.6)
     if matches:
         return template_list[candidates_norm.index(matches[0])]
 
-    # 4) 매칭 실패 → 에러
+    # 5) 매칭 실패 → 에러
     raise ValueError(f"템플릿 ‘{raw_keyword}’을(를) 찾을 수 없습니다. 정확한 이름을 입력해주세요.")
 
 @app.route("/", methods=["GET"])
@@ -157,7 +158,7 @@ def create_xlsx():
         return jsonify(error="필요한 '템플릿명' 컬럼이 없습니다."), 500
 
     template_list = sorted(df["템플릿명"].dropna().unique().tolist())
-    alias_map = build_alias_map(template_list)
+    alias_map     = build_alias_map(template_list)
 
     try:
         tpl = resolve_keyword(raw, template_list, alias_map)
@@ -165,7 +166,7 @@ def create_xlsx():
         return jsonify(error=str(e)), 400
 
     filtered = df[df["템플릿명"] == tpl]
-    out_df = filtered[["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]]
+    out_df   = filtered[["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]]
 
     def generate_xlsx():
         buffer = BytesIO()
@@ -177,59 +178,59 @@ def create_xlsx():
                 break
             yield chunk
 
-    filename = f"{tpl}.xlsx"
+    filename    = f"{tpl}.xlsx"
     disposition = "attachment; filename*=UTF-8''" + quote(filename)
-    headers = {
+    headers     = {
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "Content-Disposition": disposition,
         "Cache-Control": "public, max-age=3600"
     }
     return Response(generate_xlsx(), headers=headers)
 
-# --- 디버깅용: 템플릿 목록 및 별칭 키 확인 ---
+# --- 디버깅용: 템플릿 & 별칭 확인 ---
 @app.route("/list_templates", methods=["GET"])
 def list_templates():
     csv_path = os.path.join(DATA_DIR, "통합_노지파일.csv")
     if not os.path.exists(csv_path):
         return jsonify(error="통합 CSV 파일이 없습니다."), 404
 
-    df = pd.read_csv(csv_path)
+    df            = pd.read_csv(csv_path)
     template_list = sorted(df["템플릿명"].dropna().unique().tolist())
-    alias_map = build_alias_map(template_list)
-
+    alias_map     = build_alias_map(template_list)
     return jsonify({
         "template_list": template_list,
-        "alias_keys": sorted(alias_map.keys())
+        "alias_keys":    sorted(alias_map.keys())
     })
 
-# --- 이하 뉴스 크롤링 유틸 및 엔드포인트 (기존 코드 그대로 유지) ---
-
+# --- 뉴스 크롤링 유틸 및 엔드포인트 (기존 코드 그대로 유지) ---
 def fetch_safetynews_article_content(url):
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
-        resp = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(resp.text, "html.parser")
-        node = soup.select_one("div#article-view-content-div")
+        resp    = requests.get(url, headers=headers, timeout=10)
+        soup    = BeautifulSoup(resp.text, "html.parser")
+        node    = soup.select_one("div#article-view-content-div")
         return node.get_text("\n").strip() if node else "(본문 수집 실패)"
     except:
         return "(본문 수집 실패)"
 
 def crawl_naver_news():
     base_url = "https://openapi.naver.com/v1/search/news.json"
-    headers = {
-        "X-Naver-Client-Id": NAVER_CLIENT_ID,
+    headers  = {
+        "X-Naver-Client-Id":     NAVER_CLIENT_ID,
         "X-Naver-Client-Secret": NAVER_CLIENT_SECRET
     }
-    keywords = ["건설 사고","추락 사고","끼임 사고","질식 사고","폭발 사고","산업재해","산업안전"]
+    keywords = ["건설 사고","추락 사고","끼임 사고","질식 사고",
+                "폭발 사고","산업재해","산업안전"]
     out = []
     for kw in keywords:
         params = {"query": kw, "display": 2, "sort": "date"}
-        resp = requests.get(base_url, headers=headers, params=params, timeout=10)
+        resp   = requests.get(base_url, headers=headers, params=params, timeout=10)
         if resp.status_code != 200:
             continue
         for item in resp.json().get("items", []):
             title = BeautifulSoup(item.get("title",""), "html.parser").get_text()
-            desc  = BeautifulSoup(item.get("description",""), "html.parser").get_text()
+            desc  = BeautifulSoup(item.get("description",""),
+                                  "html.parser").get_text()
             out.append({
                 "출처": item.get("originallink","네이버"),
                 "제목": title,
@@ -240,8 +241,9 @@ def crawl_naver_news():
     return out
 
 def crawl_safetynews():
-    base = "https://www.safetynews.co.kr"
-    keywords = ["건설 사고","추락 사고","끼임 사고","질식 사고","폭발 사고","산업재해","산업안전"]
+    base     = "https://www.safetynews.co.kr"
+    keywords = ["건설 사고","추락 사고","끼임 사고","질식 사고",
+                "폭발 사고","산업재해","산업안전"]
     out = []
     for kw in keywords:
         resp = requests.get(f"{base}/search/news?searchword={kw}",
@@ -253,7 +255,8 @@ def crawl_safetynews():
             t    = item.select_one(".list-titles")
             href = base + t["href"] if t and t.get("href") else None
             d    = item.select_one(".list-dated")
-            content = fetch_safetynews_article_content(href) if href else ""
+            content = (fetch_safetynews_article_content(href)
+                       if href else "")
             out.append({
                 "출처": "안전신문",
                 "제목": t.get_text(strip=True) if t else "",
