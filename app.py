@@ -90,13 +90,22 @@ def build_alias_map(template_list: List[str]) -> dict:
         if "loto" in norm:
             alias["__FORCE_LOTO__"] = tpl
 
+    # 5) 모든 alias key에 대해 공백<->언더바 쌍생성
+    temp = {}
+    for k, v in alias.items():
+        temp[k.replace(" ", "_")] = v
+        temp[k.replace("_", " ")] = v
+    alias.update(temp)
+
     return alias
 
 
 def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict) -> str:
-    key = raw_keyword.strip()
-    key_lower = key.lower()
-    cleaned_key = key_lower.replace(" ", "").replace("_", "")
+    # 0) 언더바 · 하이픈 → 공백 normalize
+    raw = raw_keyword.strip()
+    norm = raw.replace("_", " ").replace("-", " ")
+    key_lower = norm.lower()
+    cleaned_key = key_lower.replace(" ", "")
 
     # —— JSA/LOTO 최우선 매핑 예외 처리 —— 
     if "__FORCE_JSA__" in alias_map and ("jsa" in cleaned_key or "작업안전분석" in cleaned_key):
@@ -104,38 +113,39 @@ def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict)
     if "__FORCE_LOTO__" in alias_map and "loto" in cleaned_key:
         return alias_map["__FORCE_LOTO__"]
 
-    # 0) 완전 일치 우선
+    # 1) 완전 일치 우선
     for tpl in template_list:
-        if key_lower == tpl.lower() or cleaned_key == tpl.replace(" ", "").replace("_", "").lower():
+        tpl_norm = tpl.lower().replace(" ", "").replace("_", "")
+        if key_lower == tpl.lower() or cleaned_key == tpl_norm:
             return tpl
 
-    # 1) 토큰 기반 매칭
-    tokens = [t for t in key_lower.replace("_", " ").split(" ") if t]
+    # 2) 토큰 기반 매칭
+    tokens = [t for t in key_lower.split(" ") if t]
     candidates = [tpl for tpl in template_list if all(tok in tpl.lower() for tok in tokens)]
     if len(candidates) == 1:
         return candidates[0]
 
-    # 2) 부분 문자열 매칭
+    # 3) 부분 문자열 매칭
     substr_cands = [
         tpl for tpl in template_list
-        if cleaned_key in tpl.replace(" ", "").replace("_", "").lower()
+        if cleaned_key in tpl.lower().replace(" ", "").replace("_", "")
     ]
     if len(substr_cands) == 1:
         return substr_cands[0]
 
-    # 3) alias map
-    if key in alias_map:
-        return alias_map[key]
+    # 4) alias map
+    if raw in alias_map:
+        return alias_map[raw]
     if key_lower in alias_map:
         return alias_map[key_lower]
 
-    # 4) fuzzy match
+    # 5) fuzzy match
     candidates_norm = [t.replace(" ", "").replace("_", "").lower() for t in template_list]
     matches = difflib.get_close_matches(cleaned_key, candidates_norm, n=1, cutoff=0.6)
     if matches:
         return template_list[candidates_norm.index(matches[0])]
 
-    # 5) 매칭 실패 → 에러
+    # 6) 매칭 실패 → 에러
     raise ValueError(f"템플릿 ‘{raw_keyword}’을(를) 찾을 수 없습니다. 정확한 이름을 입력해주세요.")
 
 
