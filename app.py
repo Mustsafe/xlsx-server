@@ -56,6 +56,7 @@ def serve_logo():
 NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID")
 NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
 
+
 def build_alias_map(template_list: List[str]) -> dict:
     alias = {}
     SUFFIXES = [" 점검표", " 계획서", " 서식", " 표", "양식", " 양식", "_양식"]
@@ -97,6 +98,7 @@ def build_alias_map(template_list: List[str]) -> dict:
     alias.update(temp)
 
     return alias
+
 
 def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict) -> str:
     # 0) 언더바 · 하이픈 → 공백 normalize
@@ -144,11 +146,13 @@ def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict)
         return template_list[candidates_norm.index(matches[0])]
 
     # 6) 매칭 실패 → 에러
-    raise ValueError(f"템플릿 ‘{raw_keyword}’을(를) 찾을 수 없습니다. 기본 양식을 생성합니다.")
+    raise ValueError(f"템플릿 ‘{raw_keyword}’을(를) 찾을 수 없습니다. 정확한 이름을 입력해주세요.")
+
 
 @app.route("/", methods=["GET"])
 def index():
     return "📰 사용 가능한 엔드포인트: /health, /daily_news, /render_news, /create_xlsx, /list_templates", 200
+
 
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
@@ -166,53 +170,49 @@ def create_xlsx():
 
     try:
         tpl = resolve_keyword(raw, template_list, alias_map)
-        # 정상적으로 찾았다면 기존 로직대로 필터링 후 엑셀 생성
-        filtered = df[df["템플릿명"] == tpl]
-        out_df   = filtered[["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]]
-
-        def generate_xlsx():
-            buffer = BytesIO()
-            out_df.to_excel(buffer, index=False)
-            buffer.seek(0)
-            while True:
-                chunk = buffer.read(8192)
-                if not chunk:
-                    break
-                yield chunk
-
-        filename    = f"{tpl}.xlsx"
-        disposition = "attachment; filename*=UTF-8''" + quote(filename)
-        headers     = {
-            "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "Content-Disposition": disposition,
-            "Cache-Control": "public, max-age=3600"
-        }
-        return Response(generate_xlsx(), headers=headers)
-
-    except ValueError as e:
-        # 없는 템플릿명으로 요청이 들어왔을 때, GPT에 기본 양식 생성 요청
-        system = {
-            "role": "system",
-            "content": (
-                "다음 템플릿명에 대해, 법적 근거와 서식 예시를 포함한 "
-                "양식을 한국어로 출력해주세요.\n"
-                "출력 예시 형식:\n"
-                "템플릿명 (서식 예시)\n"
-                "법적 근거: …\n"
-                "법령정보센터\n\n"
-                "항목\t기입 내용\n"
-                "…\n\n"
-                "제출 방법: …"
-            )
-        }
-        user = {"role": "user", "content": raw}
+    except ValueError:
+        # CSV에 없을 때 → 기본 양식 예시를 GPT로 생성하여 돌려줌
+        prompt = (
+            f"'{raw}'에 대한 업무 서식(양식) 예시를 아래 포맷으로 마크다운으로 작성해 주세요.\n\n"
+            f"## {raw} (서식 예시)\n"
+            "**법적 근거:** 「__법령명__」 제__조(__항__)\n\n"
+            "| 항목       | 기입 내용 |\n"
+            "| ---------- | --------- |\n"
+            "| …          | …         |\n\n"
+            "**제출 방법:** __제출 절차 간단히__"
+        )
         resp = openai.ChatCompletion.create(
             model="gpt-4o-mini",
-            messages=[system, user],
-            max_tokens=800,
-            temperature=0.7
+            messages=[
+                {"role": "system", "content": "당신은 친절한 서식 전문가입니다."},
+                {"role": "user",   "content": prompt}
+            ],
+            temperature=0.2,
         )
-        return jsonify(default_template=resp.choices[0].message.content), 200
+        return jsonify(template=resp.choices[0].message.content), 200
+
+    filtered = df[df["템플릿명"] == tpl]
+    out_df   = filtered[["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]]
+
+    def generate_xlsx():
+        buffer = BytesIO()
+        out_df.to_excel(buffer, index=False)
+        buffer.seek(0)
+        while True:
+            chunk = buffer.read(8192)
+            if not chunk:
+                break
+            yield chunk
+
+    filename    = f"{tpl}.xlsx"
+    disposition = "attachment; filename*=UTF-8''" + quote(filename)
+    headers     = {
+        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Disposition": disposition,
+        "Cache-Control": "public, max-age=3600"
+    }
+    return Response(generate_xlsx(), headers=headers)
+
 
 # --- 디버깅용: 템플릿 & 별칭 확인 ---
 @app.route("/list_templates", methods=["GET"])
@@ -229,6 +229,7 @@ def list_templates():
         "alias_keys":    sorted(alias_map.keys())
     })
 
+
 # --- 뉴스 크롤링 유틸 및 엔드포인트 (기존 코드 그대로 유지) ---
 def fetch_safetynews_article_content(url):
     try:
@@ -239,6 +240,7 @@ def fetch_safetynews_article_content(url):
         return node.get_text("\n").strip() if node else "(본문 수집 실패)"
     except:
         return "(본문 수집 실패)"
+
 
 def crawl_naver_news():
     base_url = "https://openapi.naver.com/v1/search/news.json"
@@ -266,6 +268,7 @@ def crawl_naver_news():
             })
     return out
 
+
 def crawl_safetynews():
     base     = "https://www.safetynews.co.kr"
     keywords = ["건설 사고","추락 사고","끼임 사고","질식 사고",
@@ -291,12 +294,14 @@ def crawl_safetynews():
             })
     return out
 
+
 @app.route("/daily_news", methods=["GET"])
 def get_daily_news():
     news = crawl_naver_news() + crawl_safetynews()
     if not news:
         return jsonify(error="가져올 뉴스가 없습니다."), 200
     return jsonify(news)
+
 
 @app.route("/render_news", methods=["GET"])
 def render_news():
@@ -338,6 +343,7 @@ def render_news():
         temperature=0.7
     )
     return jsonify(formatted_news=resp.choices[0].message.content)
+
 
 if __name__ == "__main__":
     # PORT 환경 변수가 없다면 5000번 포트를 씁니다.
