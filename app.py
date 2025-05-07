@@ -218,4 +218,4 @@ def fetch_safetynews_article_content(url):
     except:
         return "(본문 수집 실패)"
 
-
+... (이하 기존 /daily_news, /render_news 엔드포인트 동일 유지)
