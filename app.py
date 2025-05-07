@@ -148,9 +148,11 @@ def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict)
     # 6) 매칭 실패 → 에러
     raise ValueError(f"템플릿 ‘{raw_keyword}’을(를) 찾을 수 없습니다. 정확한 이름을 입력해주세요.")
 
+
 @app.route("/", methods=["GET"])
 def index():
     return "📰 사용 가능한 엔드포인트: /health, /daily_news, /render_news, /create_xlsx, /list_templates", 200
+
 
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
@@ -193,6 +195,8 @@ def create_xlsx():
     }
     return Response(generate_xlsx(), headers=headers)
 
+
+# --- 디버깅용: 템플릿 & 별칭 확인 ---
 @app.route("/list_templates", methods=["GET"])
 def list_templates():
     csv_path = os.path.join(DATA_DIR, "통합_노지파일.csv")
@@ -207,6 +211,7 @@ def list_templates():
         "alias_keys":    sorted(alias_map.keys())
     })
 
+
 # --- 뉴스 크롤링 유틸 및 엔드포인트 (기존 코드 그대로 유지) ---
 def fetch_safetynews_article_content(url):
     try:
@@ -218,4 +223,110 @@ def fetch_safetynews_article_content(url):
     except:
         return "(본문 수집 실패)"
 
-... (이하 기존 /daily_news, /render_news 엔드포인트 동일 유지)
+
+def crawl_naver_news():
+    base_url = "https://openapi.naver.com/v1/search/news.json"
+    headers  = {
+        "X-Naver-Client-Id":     NAVER_CLIENT_ID,
+        "X-Naver-Client-Secret": NAVER_CLIENT_SECRET
+    }
+    keywords = ["건설 사고","추락 사고","끼임 사고","질식 사고",
+                "폭발 사고","산업재해","산업안전"]
+    out = []
+    for kw in keywords:
+        params = {"query": kw, "display": 2, "sort": "date"}
+        resp   = requests.get(base_url, headers=headers, params=params, timeout=10)
+        if resp.status_code != 200:
+            continue
+        for item in resp.json().get("items", []):
+            title = BeautifulSoup(item.get("title",""), "html.parser").get_text()
+            desc  = BeautifulSoup(item.get("description",""), "html.parser").get_text()
+            out.append({
+                "출처": item.get("originallink","네이버"),
+                "제목": title,
+                "링크": item.get("link",""),
+                "날짜": item.get("pubDate",""),
+                "본문": desc
+            })
+    return out
+
+
+def crawl_safetynews():
+    base     = "https://www.safetynews.co.kr"
+    keywords = ["건설 사고","추락 사고","끼임 사고","질식 사고",
+                "폭발 사고","산업재해","산업안전"]
+    out = []
+    for kw in keywords:
+        resp = requests.get(f"{base}/search/news?searchword={kw}",
+                            headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
+        if resp.status_code != 200:
+            continue
+        soup = BeautifulSoup(resp.text, "html.parser")
+        for item in soup.select(".article-list-content")[:2]:
+            t    = item.select_one(".list-titles")
+            href = base + t["href"] if t and t.get("href") else None
+            d    = item.select_one(".list-dated")
+            content = fetch_safetynews_article_content(href) if href else ""
+            out.append({
+                "출처": "안전신문",
+                "제목": t.get_text(strip=True) if t else "",
+                "링크": href,
+                "날짜": d.get_text(strip=True) if d else "",
+                "본문": content[:1000]
+            })
+    return out
+
+
+@app.route("/daily_news", methods=["GET"])
+def get_daily_news():
+    news = crawl_naver_news() + crawl_safetynews()
+    if not news:
+        return jsonify(error="가져올 뉴스가 없습니다."), 200
+    return jsonify(news)
+
+
+@app.route("/render_news", methods=["GET"])
+def render_news():
+    raw    = crawl_naver_news() + crawl_safetynews()
+    cutoff = datetime.utcnow() - timedelta(days=3)
+    filtered = []
+    for n in raw:
+        try:
+            dt = parser.parse(n["날짜"])
+        except:
+            continue
+        if dt >= cutoff:
+            n["날짜"] = dt.strftime("%Y.%m.%d")
+            filtered.append(n)
+
+    news_items = sorted(filtered,
+                        key=lambda x: parser.parse(x["날짜"]),
+                        reverse=True)[:3]
+    if not news_items:
+        return jsonify(error="가져올 뉴스가 없습니다."), 200
+
+    template_text = (
+        "📌 산업 안전 및 보건 최신 뉴스\n"
+        "📰 “{title}” ({date}, {source})\n\n"
+        "{headline}\n"
+        "🔎 {recommendation}\n"
+        "👉 요약 제공됨 · “뉴스 더 보여줘” 입력 시 유사 사례 추가 확인 가능"
+    )
+    system_message = {
+        "role":"system",
+        "content":f"다음 JSON 형식의 뉴스 목록을 아래 템플릿에 맞춰 출력하세요.\n템플릿:\n{template_text}"
+    }
+    user_message = {"role":"user","content":str(news_items)}
+
+    resp = openai.ChatCompletion.create(
+        model="gpt-4o-mini",
+        messages=[system_message, user_message],
+        max_tokens=800,
+        temperature=0.7
+    )
+    return jsonify(formatted_news=resp.choices[0].message.content)
+
+
+if __name__ == "__main__":
+    # PORT 환경 변수가 없다면 5000번 포트를 씁니다.
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
