@@ -56,13 +56,11 @@ def serve_logo():
 NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID")
 NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
 
-
 def build_alias_map(template_list: List[str]) -> dict:
     alias = {}
     SUFFIXES = [" 점검표", " 계획서", " 서식", " 표", "양식", " 양식", "_양식"]
 
     for tpl in template_list:
-        # 1) 기본 매핑
         alias[tpl] = tpl
         alias[tpl.replace("_", " ")] = tpl
         alias[tpl.replace(" ", "_")] = tpl
@@ -70,19 +68,16 @@ def build_alias_map(template_list: List[str]) -> dict:
         alias[low] = tpl
         alias[low.replace("_", " ")] = tpl
 
-        # 2) 공백 제거 버전
         base_space = tpl.replace("_", " ")
         nospace = base_space.replace(" ", "").lower()
         alias[nospace] = tpl
 
-        # 3) 다양한 접미사
         for suf in SUFFIXES:
             combo = base_space + suf
             alias[combo] = tpl
             alias[combo.replace(" ", "_")] = tpl
             alias[combo.lower()] = tpl
 
-    # 4) JSA·LOTO 최우선 매핑
     for tpl in template_list:
         norm = tpl.lower().replace(" ", "").replace("_", "")
         if "jsa" in norm or "작업안전분석" in norm:
@@ -90,7 +85,6 @@ def build_alias_map(template_list: List[str]) -> dict:
         if "loto" in norm:
             alias["__FORCE_LOTO__"] = tpl
 
-    # 5) 모든 alias key에 대해 공백<->언더바 쌍생성
     temp = {}
     for k, v in alias.items():
         temp[k.replace(" ", "_")] = v
@@ -99,33 +93,27 @@ def build_alias_map(template_list: List[str]) -> dict:
 
     return alias
 
-
 def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict) -> str:
-    # 0) 언더바 · 하이픈 → 공백 normalize
     raw = raw_keyword.strip()
     norm = raw.replace("_", " ").replace("-", " ")
     key_lower = norm.lower()
     cleaned_key = key_lower.replace(" ", "")
 
-    # —— JSA/LOTO 최우선 매핑 예외 처리 —— 
     if "__FORCE_JSA__" in alias_map and ("jsa" in cleaned_key or "작업안전분석" in cleaned_key):
         return alias_map["__FORCE_JSA__"]
     if "__FORCE_LOTO__" in alias_map and "loto" in cleaned_key:
         return alias_map["__FORCE_LOTO__"]
 
-    # 1) 완전 일치 우선
     for tpl in template_list:
         tpl_norm = tpl.lower().replace(" ", "").replace("_", "")
         if key_lower == tpl.lower() or cleaned_key == tpl_norm:
             return tpl
 
-    # 2) 토큰 기반 매칭
     tokens = [t for t in key_lower.split(" ") if t]
     candidates = [tpl for tpl in template_list if all(tok in tpl.lower() for tok in tokens)]
     if len(candidates) == 1:
         return candidates[0]
 
-    # 3) 부분 문자열 매칭
     substr_cands = [
         tpl for tpl in template_list
         if cleaned_key in tpl.lower().replace(" ", "").replace("_", "")
@@ -133,26 +121,39 @@ def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict)
     if len(substr_cands) == 1:
         return substr_cands[0]
 
-    # 4) alias map
     if raw in alias_map:
         return alias_map[raw]
     if key_lower in alias_map:
         return alias_map[key_lower]
 
-    # 5) fuzzy match
     candidates_norm = [t.replace(" ", "").replace("_", "").lower() for t in template_list]
     matches = difflib.get_close_matches(cleaned_key, candidates_norm, n=1, cutoff=0.6)
     if matches:
         return template_list[candidates_norm.index(matches[0])]
 
-    # 6) 매칭 실패 → 에러
     raise ValueError(f"템플릿 ‘{raw_keyword}’을(를) 찾을 수 없습니다. 정확한 이름을 입력해주세요.")
 
+def parse_markdown_table(md: str) -> pd.DataFrame:
+    """
+    최소한의 Markdown 표 파싱: 
+    | 헤더1 | 헤더2 |
+    |---|---|
+    | 값1 | 값2 |
+    """
+    lines = [l.strip() for l in md.splitlines() if l.strip()]
+    if len(lines) < 2 or '|' not in lines[0]:
+        raise ValueError("표 형식을 인식할 수 없습니다.")
+    header = [h.strip() for h in lines[0].strip('|').split('|')]
+    rows = []
+    for row in lines[2:]:
+        cols = [c.strip() for c in row.strip('|').split('|')]
+        if len(cols) == len(header):
+            rows.append(cols)
+    return pd.DataFrame(rows, columns=header)
 
 @app.route("/", methods=["GET"])
 def index():
     return "📰 사용 가능한 엔드포인트: /health, /daily_news, /render_news, /create_xlsx, /list_templates", 200
-
 
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
@@ -170,49 +171,36 @@ def create_xlsx():
 
     try:
         tpl = resolve_keyword(raw, template_list, alias_map)
+        filtered = df[df["템플릿명"] == tpl]
+        out_df   = filtered[["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]]
     except ValueError:
-        # CSV에 없을 때 → 기본 양식 예시를 GPT로 생성하여 돌려줌
-        prompt = (
-            f"'{raw}'에 대한 업무 서식(양식) 예시를 아래 포맷으로 마크다운으로 작성해 주세요.\n\n"
-            f"## {raw} (서식 예시)\n"
-            "**법적 근거:** 「__법령명__」 제__조(__항__)\n\n"
-            "| 항목       | 기입 내용 |\n"
-            "| ---------- | --------- |\n"
-            "| …          | …         |\n\n"
-            "**제출 방법:** __제출 절차 간단히__"
-        )
-        resp = openai.ChatCompletion.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "당신은 친절한 서식 전문가입니다."},
-                {"role": "user",   "content": prompt}
-            ],
-            temperature=0.2,
-        )
-        return jsonify(template=resp.choices[0].message.content), 200
+        # 없는 템플릿: GPT 호출로 기본 양식(markdown) 생성
+        try:
+            resp = openai.ChatCompletion.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role":"system","content":"다음 템플릿명에 맞는 기본 양식을 Markdown 표로 내려주세요."},
+                    {"role":"user","content":raw}
+                ],
+                temperature=0.0)
+            md_table = resp.choices[0].message.content
+            out_df = parse_markdown_table(md_table)
+        except Exception as e:
+            return jsonify(error="기본 양식 생성 실패: " + str(e)), 500
 
-    filtered = df[df["템플릿명"] == tpl]
-    out_df   = filtered[["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]]
+    # XLSX 생성
+    buffer = BytesIO()
+    out_df.to_excel(buffer, index=False)
+    buffer.seek(0)
 
-    def generate_xlsx():
-        buffer = BytesIO()
-        out_df.to_excel(buffer, index=False)
-        buffer.seek(0)
-        while True:
-            chunk = buffer.read(8192)
-            if not chunk:
-                break
-            yield chunk
-
-    filename    = f"{tpl}.xlsx"
+    filename    = f"{(tpl if 'tpl' in locals() else raw)}.xlsx"
     disposition = "attachment; filename*=UTF-8''" + quote(filename)
     headers     = {
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "Content-Disposition": disposition,
         "Cache-Control": "public, max-age=3600"
     }
-    return Response(generate_xlsx(), headers=headers)
-
+    return Response(buffer.read(), headers=headers)
 
 # --- 디버깅용: 템플릿 & 별칭 확인 ---
 @app.route("/list_templates", methods=["GET"])
@@ -229,8 +217,7 @@ def list_templates():
         "alias_keys":    sorted(alias_map.keys())
     })
 
-
-# --- 뉴스 크롤링 유틸 및 엔드포인트 (기존 코드 그대로 유지) ---
+# --- 이하 뉴스 크롤링/렌더링 엔드포인트 (원본 그대로 유지) ---
 def fetch_safetynews_article_content(url):
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -241,15 +228,13 @@ def fetch_safetynews_article_content(url):
     except:
         return "(본문 수집 실패)"
 
-
 def crawl_naver_news():
     base_url = "https://openapi.naver.com/v1/search/news.json"
     headers  = {
         "X-Naver-Client-Id":     NAVER_CLIENT_ID,
         "X-Naver-Client-Secret": NAVER_CLIENT_SECRET
     }
-    keywords = ["건설 사고","추락 사고","끼임 사고","질식 사고",
-                "폭발 사고","산업재해","산업안전"]
+    keywords = ["건설 사고","추락 사고","끼임 사고","질식 사고","폭발 사고","산업재해","산업안전"]
     out = []
     for kw in keywords:
         params = {"query": kw, "display": 2, "sort": "date"}
@@ -268,11 +253,9 @@ def crawl_naver_news():
             })
     return out
 
-
 def crawl_safetynews():
     base     = "https://www.safetynews.co.kr"
-    keywords = ["건설 사고","추락 사고","끼임 사고","질식 사고",
-                "폭발 사고","산업재해","산업안전"]
+    keywords = ["건설 사고","추락 사고","끼임 사고","질식 사고","폭발 사고","산업재해","산업안전"]
     out = []
     for kw in keywords:
         resp = requests.get(f"{base}/search/news?searchword={kw}",
@@ -294,14 +277,12 @@ def crawl_safetynews():
             })
     return out
 
-
 @app.route("/daily_news", methods=["GET"])
 def get_daily_news():
     news = crawl_naver_news() + crawl_safetynews()
     if not news:
         return jsonify(error="가져올 뉴스가 없습니다."), 200
     return jsonify(news)
-
 
 @app.route("/render_news", methods=["GET"])
 def render_news():
@@ -344,7 +325,5 @@ def render_news():
     )
     return jsonify(formatted_news=resp.choices[0].message.content)
 
-
 if __name__ == "__main__":
-    # PORT 환경 변수가 없다면 5000번 포트를 씁니다.
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
