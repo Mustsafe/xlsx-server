@@ -33,7 +33,6 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 @app.route("/health", methods=["GET"])
 def health_check():
-    logger.info("Health check endpoint called")
     return "OK", 200
 
 @app.route("/.well-known/<path:filename>")
@@ -93,25 +92,31 @@ def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict)
     norm = raw.replace("_", " ").replace("-", " ")
     key_lower = norm.lower()
     cleaned_key = key_lower.replace(" ", "")
+
     if "__FORCE_JSA__" in alias_map and ("jsa" in cleaned_key or "작업안전분석" in cleaned_key):
         return alias_map["__FORCE_JSA__"]
     if "__FORCE_LOTO__" in alias_map and "loto" in cleaned_key:
         return alias_map["__FORCE_LOTO__"]
+
     for tpl in template_list:
         if key_lower == tpl.lower() or cleaned_key == tpl.replace(" ", "").replace("_", "").lower():
             return tpl
+
     tokens = [t for t in key_lower.split(" ") if t]
     candidates = [tpl for tpl in template_list if all(tok in tpl.lower() for tok in tokens)]
     if len(candidates) == 1:
         return candidates[0]
+
     if raw in alias_map:
         return alias_map[raw]
     if key_lower in alias_map:
         return alias_map[key_lower]
+
     candidates_norm = [t.replace(" ", "").replace("_", "").lower() for t in template_list]
     matches = difflib.get_close_matches(cleaned_key, candidates_norm, n=1, cutoff=0.8)
     if matches:
         return template_list[candidates_norm.index(matches[0])]
+
     raise ValueError(f"템플릿 '{raw_keyword}'을(를) 찾을 수 없습니다.")
 
 @app.route("/", methods=["GET"])
@@ -134,10 +139,12 @@ def create_xlsx():
     template_list = sorted(df["템플릿명"].dropna().unique().tolist())
     alias_map      = build_alias_map(template_list)
 
+    # CSV 매핑 시도
     try:
         tpl = resolve_keyword(raw, template_list, alias_map)
         filtered = df[df["템플릿명"] == tpl]
         out_df   = filtered[["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]]
+    # 매핑 실패 시 GPT fallback
     except ValueError:
         system_prompt = {
             "role":"system",
@@ -170,6 +177,7 @@ def create_xlsx():
                 "실무 예시 2": ""
             }])
 
+    # Excel 생성
     wb = Workbook()
     ws = wb.active
     ws.append(["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"])
@@ -179,9 +187,9 @@ def create_xlsx():
     for row in out_df.itertuples(index=False):
         ws.append(row)
 
-    buf = BytesIO()
-    wb.save(buf)
-    buf.seek(0)
+    buffer = BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
 
     filename = f"{tpl if 'tpl' in locals() else raw}.xlsx"
     disposition = "attachment; filename*=UTF-8''" + quote(filename)
@@ -190,7 +198,7 @@ def create_xlsx():
         "Content-Disposition": disposition,
         "Cache-Control":"public, max-age=3600"
     }
-    return Response(buf.read(), headers=headers)
+    return Response(buffer.read(), headers=headers)
 
 @app.route("/list_templates", methods=["GET"])
 def list_templates():
@@ -220,10 +228,9 @@ def crawl_naver_news():
         "X-Naver-Client-Secret":NAVER_CLIENT_SECRET
     }
     kws = ["건설 사고","추락 사고","끼임 사고","질식 사고","폭발 사고","산업재해","산업안전"]
-    out = []
+    out=[]
     for kw in kws:
-        params = {"query":kw,"display":2,"sort":"date"}
-        r = requests.get(base, headers=headers, params=params, timeout=10)
+        r = requests.get(base, headers=headers, params={"query":kw,"display":2,"sort":"date"}, timeout=10)
         if r.status_code!=200: continue
         for item in r.json().get("items",[]):
             title = BeautifulSoup(item["title"],"html.parser").get_text()
@@ -248,7 +255,7 @@ def crawl_safetynews():
         for item in soup.select(".article-list-content")[:2]:
             t = item.select_one(".list-titles")
             href = base + t["href"] if t and t.get("href") else None
-            d = item.select_one(".list-dated")
+            d    = item.select_one(".list-dated")
             content = fetch_safetynews_article_content(href) if href else ""
             out.append({
                 "출처":"안전신문",
@@ -269,6 +276,7 @@ def get_daily_news():
 def render_news():
     news = crawl_naver_news() + crawl_safetynews()
     if not news: return jsonify(error="가져올 뉴스가 없습니다."),200
+
     cutoff = datetime.utcnow()-timedelta(days=3)
     filtered=[]
     for n in news:
@@ -279,8 +287,10 @@ def render_news():
         if dt>=cutoff:
             n["날짜"]=dt.strftime("%Y.%m.%d")
             filtered.append(n)
+
     items = sorted(filtered, key=lambda x: parser.parse(x["날짜"]), reverse=True)[:3]
     if not items: return jsonify(error="가져올 뉴스가 없습니다."),200
+
     template_text = (
         "📌 산업 안전 및 보건 최신 뉴스\n"
         "📰 “{title}” ({date}, {출처})\n\n"
@@ -292,6 +302,7 @@ def render_news():
         "content":f"다음 JSON 형식의 뉴스 목록을 아래 템플릿에 맞춰 출력하세요.\n템플릿:\n{template_text}"
     }
     user_message={"role":"user","content":str(items)}
+
     resp = openai.chat.completions.create(
         model="gpt-4o-mini",
         messages=[system_message,user_message],
