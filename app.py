@@ -12,6 +12,8 @@ from typing import List
 from urllib.parse import quote
 import json
 import logging
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment
 
 # 로거 설정
 logging.basicConfig(
@@ -102,30 +104,25 @@ def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict)
     key_lower = norm.lower()
     cleaned_key = key_lower.replace(" ", "")
 
-    # JSA/LOTO 예외
     if "__FORCE_JSA__" in alias_map and ("jsa" in cleaned_key or "작업안전분석" in cleaned_key):
         return alias_map["__FORCE_JSA__"]
     if "__FORCE_LOTO__" in alias_map and "loto" in cleaned_key:
         return alias_map["__FORCE_LOTO__"]
 
-    # 1) 정확 일치
     for tpl in template_list:
         if key_lower == tpl.lower() or cleaned_key == tpl.replace(" ", "").replace("_", "").lower():
             return tpl
 
-    # 2) 토큰 매치
     tokens = [t for t in key_lower.split(" ") if t]
     candidates = [tpl for tpl in template_list if all(tok in tpl.lower() for tok in tokens)]
     if len(candidates) == 1:
         return candidates[0]
 
-    # 3) alias 맵
     if raw in alias_map:
         return alias_map[raw]
     if key_lower in alias_map:
         return alias_map[key_lower]
 
-    # 4) fuzzy 매치
     candidates_norm = [t.replace(" ", "").replace("_", "").lower() for t in template_list]
     matches = difflib.get_close_matches(cleaned_key, candidates_norm, n=1, cutoff=0.8)
     if matches:
@@ -142,7 +139,6 @@ def create_xlsx():
     raw = request.args.get("template", "")
     logger.info(f"create_xlsx called with template={raw}")
 
-    # CSV 로드 및 기본 검증
     csv_path = os.path.join(DATA_DIR, "통합_노지파일.csv")
     if not os.path.exists(csv_path):
         logger.error("통합 CSV 파일이 없습니다.")
@@ -156,14 +152,12 @@ def create_xlsx():
     template_list = sorted(df["템플릿명"].dropna().unique().tolist())
     alias_map      = build_alias_map(template_list)
 
-    # 1) 등록된 템플릿 lookup
     try:
         tpl = resolve_keyword(raw, template_list, alias_map)
         logger.info(f"Template matched: {tpl}")
         filtered = df[df["템플릿명"] == tpl]
         out_df   = filtered[["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]]
     except ValueError:
-        # 2) 미등록 템플릿일 때 GPT로 fallback
         logger.warning(f"Template '{raw}' not found → using GPT fallback")
 
         system_prompt = {
@@ -205,19 +199,19 @@ def create_xlsx():
                 "실무 예시 2": ""
             }])
 
-    # === 공통: 결과를 고도화된 표 형식으로 엑셀 변환하여 응답 (openpyxl 사용) ===
-    from openpyxl import Workbook
-    from openpyxl.styles import Font
-
     wb = Workbook()
     ws = wb.active
 
     ws.append(list(out_df.columns))
     for cell in ws[1]:
         cell.font = Font(bold=True)
+        cell.alignment = Alignment(wrap_text=True)
 
     for row in out_df.itertuples(index=False):
         ws.append(row)
+    for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=1, max_col=ws.max_column):
+        for cell in row:
+            cell.alignment = Alignment(wrap_text=True)
 
     buffer = BytesIO()
     wb.save(buffer)
@@ -246,7 +240,6 @@ def list_templates():
         "alias_keys": sorted(build_alias_map(sorted(df["템플릿명"].dropna().unique())).keys())
     })
 
-# 이하 뉴스 크롤링 및 render_news 엔드포인트 (변경 없음)
 def fetch_safetynews_article_content(url):
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -281,6 +274,36 @@ def crawl_naver_news():
                 "본문": desc
             })
     return out
+
+def crawl_safetynews():
+    base     = "https://www.safetynews.co.kr"
+    keywords = ["건설 사고","추락 사고","끼임 사고","질식 사고","폭발 사고","산업재해","산업안전"]
+    out = []
+    for kw in keywords:
+        resp = requests.get(f"{base}/search/news?searchword={kw}", headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
+        if resp.status_code != 200:
+            continue
+        soup = BeautifulSoup(resp.text, "html.parser")
+        for item in soup.select(".article-list-content")[:2]:
+            t    = item.select_one(".list-titles")
+            href = base + t["href"] if t and t.get("href") else None
+            d    = item.select_one(".list-dated")
+            content = fetch_safetynews_article_content(href) if href else ""
+            out.append({
+                "출처": "안전신문",
+                "제목": t.get_text(strip=True) if t else "",
+                "링크": href,
+                "날짜": d.get_text(strip=True) if d else "",
+                "본문": content[:1000]
+            })
+    return out
+
+@app.route("/daily_news", methods=["GET"])
+def get_daily_news():
+    news = crawl_naver_news() + crawl_safetynews()
+    if not news:
+        return jsonify(error="가져올 뉴스가 없습니다."), 200
+    return jsonify(news)
 
 @app.route("/render_news", methods=["GET"])
 def render_news():
