@@ -15,6 +15,7 @@ import logging
 from openpyxl import Workbook
 from openpyxl.styles import Font
 
+# 로거 설정
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s"
@@ -22,47 +23,48 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-app.config['JSON_AS_ASCII'] = False
+app.config['JSON_AS_ASCII'] = False  # 한글 깨짐 방지
 
+# 환경 변수 로드
 openai.api_key = os.getenv("OPENAI_API_KEY")
 NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID")
 NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
 
+# 데이터 디렉토리
 DATA_DIR = "./data"
 os.makedirs(DATA_DIR, exist_ok=True)
 
-
 @app.route("/health", methods=["GET"])
 def health_check():
+    logger.info("Health check endpoint called")
     return "OK", 200
-
 
 @app.route("/.well-known/<path:filename>")
 def serve_well_known(filename):
+    logger.info(f"Serving well-known file: {filename}")
     return send_from_directory(
         os.path.join(app.root_path, "static", ".well-known"),
         filename,
         mimetype="application/json"
     )
 
-
 @app.route("/openapi.json")
 def serve_openapi():
+    logger.info("Serving openapi.json")
     return send_from_directory(
         os.path.join(app.root_path, "static"),
         "openapi.json",
         mimetype="application/json"
     )
 
-
 @app.route("/logo.png")
 def serve_logo():
+    logger.info("Serving logo.png")
     return send_from_directory(
         os.path.join(app.root_path, "static"),
         "logo.png",
         mimetype="image/png"
     )
-
 
 def build_alias_map(template_list: List[str]) -> dict:
     alias = {}
@@ -95,19 +97,18 @@ def build_alias_map(template_list: List[str]) -> dict:
     alias.update(temp)
     return alias
 
-
 def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict) -> str:
     raw = raw_keyword.strip()
     norm = raw.replace("_", " ").replace("-", " ")
     key_lower = norm.lower()
     cleaned = key_lower.replace(" ", "")
 
-    # 0) 사용자가 정확히 템플릿명을 입력한 경우 우선 처리
+    # 0) 원문(또는 공백/언더바만 치환한 형태) 그대로 일치 검사
     for tpl in template_list:
-        if raw == tpl or raw.replace(" ", "_") == tpl or raw.replace("_", " ") == tpl:
+        if raw == tpl or raw.replace("_", " ") == tpl or raw.replace(" ", "_") == tpl:
             return tpl
 
-    # 1) JSA/LOTO 우선
+    # 1) JSA/LOTO 예외 처리
     if "__FORCE_JSA__" in alias_map and ("jsa" in cleaned or "작업안전분석" in cleaned):
         return alias_map["__FORCE_JSA__"]
     if "__FORCE_LOTO__" in alias_map and "loto" in cleaned:
@@ -132,17 +133,15 @@ def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict)
 
     # 5) fuzzy match (cutoff 강화)
     tpl_keys = [tpl.replace(" ", "").replace("_", "").lower() for tpl in template_list]
-    matches = difflib.get_close_matches(cleaned, tpl_keys, n=1, cutoff=0.75)
+    matches = difflib.get_close_matches(cleaned, tpl_keys, n=1, cutoff=0.8)
     if matches:
         return template_list[tpl_keys.index(matches[0])]
 
     raise ValueError(f"템플릿 '{raw_keyword}'을(를) 찾을 수 없습니다.")
 
-
 @app.route("/", methods=["GET"])
 def index():
     return "📰 endpoints: /health, /daily_news, /render_news, /create_xlsx, /list_templates", 200
-
 
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
@@ -151,34 +150,38 @@ def create_xlsx():
 
     csv_path = os.path.join(DATA_DIR, "통합_노지파일.csv")
     if not os.path.exists(csv_path):
+        logger.error("통합 CSV 파일이 없습니다.")
         return jsonify(error="통합 CSV 파일이 없습니다."), 404
 
     df = pd.read_csv(csv_path)
     if "템플릿명" not in df.columns:
+        logger.error("필요한 '템플릿명' 컬럼이 없습니다.")
         return jsonify(error="필요한 '템플릿명' 컬럼이 없습니다."), 500
 
     template_list = sorted(df["템플릿명"].dropna().unique().tolist())
     alias_map = build_alias_map(template_list)
 
-    # 1) CSV 매핑 시도
     try:
         tpl = resolve_keyword(raw, template_list, alias_map)
+        logger.info(f"Template matched: {tpl}")
         filtered = df[df["템플릿명"] == tpl]
         out_df = filtered[["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]]
-    # 2) 매핑 실패 시 GPT fallback
     except ValueError:
+        logger.warning(f"Template '{raw}' not found → using GPT fallback")
         system_prompt = {
             "role": "system",
             "content": (
-                "당신은 산업안전 분야 문서 템플릿 전문가입니다.\n"
-                "아래 컬럼 구조에 맞춰 5개 이상의 항목을 가진 JSON 배열을 생성해 주세요.\n"
+                "당신은 산업안전 분야 문서 템플릿 전문가입니다. "
+                "아래 컬럼 구조에 맞춰 5개 이상의 항목을 가진 **순수 JSON 배열**만, "
+                "추가 설명 없이 출력해주세요.\n\n"
                 "컬럼: 작업 항목, 작성 양식, 실무 예시 1, 실무 예시 2\n"
-                f"템플릿명: {raw}"
+                f"템플릿명: {raw}\n"
+                "반드시 JSON 배열만 출력하세요."
             )
         }
         user_prompt = {
             "role": "user",
-            "content": f"템플릿명 '{raw}'의 기본 양식을 JSON으로 주세요."
+            "content": f"템플릿명 '{raw}'의 기본 양식을 JSON 배열로 제공해 주세요."
         }
         resp = openai.chat.completions.create(
             model="gpt-4o-mini",
@@ -190,7 +193,8 @@ def create_xlsx():
         try:
             data = json.loads(text)
             out_df = pd.DataFrame(data)
-        except:
+        except Exception as parse_err:
+            logger.error(f"Fallback JSON parsing failed: {parse_err}\nContent: {text}")
             out_df = pd.DataFrame([{
                 "작업 항목": raw,
                 "작성 양식": text,
@@ -198,13 +202,12 @@ def create_xlsx():
                 "실무 예시 2": ""
             }])
 
-    # Excel 생성
+    # Excel 파일 생성
     wb = Workbook()
     ws = wb.active
     ws.append(["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"])
     for cell in ws[1]:
         cell.font = Font(bold=True)
-
     for row in out_df.itertuples(index=False):
         ws.append(row)
 
@@ -221,9 +224,9 @@ def create_xlsx():
     }
     return Response(buffer.read(), headers=headers)
 
-
 @app.route("/list_templates", methods=["GET"])
 def list_templates():
+    logger.info("list_templates called")
     csv_path = os.path.join(DATA_DIR, "통합_노지파일.csv")
     if not os.path.exists(csv_path):
         return jsonify(error="통합 CSV 파일이 없습니다."), 404
@@ -234,7 +237,6 @@ def list_templates():
         "alias_keys": sorted(build_alias_map(templates).keys())
     })
 
-
 def fetch_safetynews_article_content(url):
     try:
         r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
@@ -243,7 +245,6 @@ def fetch_safetynews_article_content(url):
         return node.get_text("\n").strip() if node else "(본문 수집 실패)"
     except:
         return "(본문 수집 실패)"
-
 
 def crawl_naver_news():
     base = "https://openapi.naver.com/v1/search/news.json"
@@ -269,7 +270,6 @@ def crawl_naver_news():
             })
     return out
 
-
 def crawl_safetynews():
     base = "https://www.safetynews.co.kr"
     kws = ["건설 사고", "추락 사고", "끼임 사고", "질식 사고", "폭발 사고", "산업재해", "산업안전"]
@@ -293,7 +293,6 @@ def crawl_safetynews():
             })
     return out
 
-
 @app.route("/daily_news", methods=["GET"])
 def get_daily_news():
     news = crawl_naver_news() + crawl_safetynews()
@@ -301,13 +300,11 @@ def get_daily_news():
         return jsonify(error="가져올 뉴스가 없습니다."), 200
     return jsonify(news)
 
-
 @app.route("/render_news", methods=["GET"])
 def render_news():
     news = crawl_naver_news() + crawl_safetynews()
     if not news:
         return jsonify(error="가져올 뉴스가 없습니다."), 200
-
     cutoff = datetime.utcnow() - timedelta(days=3)
     filtered = []
     for n in news:
@@ -318,23 +315,17 @@ def render_news():
         if dt >= cutoff:
             n["날짜"] = dt.strftime("%Y.%m.%d")
             filtered.append(n)
-
     items = sorted(filtered, key=lambda x: parser.parse(x["날짜"]), reverse=True)[:3]
     if not items:
         return jsonify(error="가져올 뉴스가 없습니다."), 200
-
-    template_text = (
+    template = (
         "📌 산업 안전 및 보건 최신 뉴스\n"
         "📰 “{title}” ({date}, {출처})\n\n"
         "{본문}\n"
         "🔎 더 보려면 “뉴스 더 보여줘”를 입력하세요."
     )
-    system_message = {
-        "role": "system",
-        "content": f"다음 JSON 형식의 뉴스 목록을 아래 템플릿에 맞춰 출력하세요.\n템플릿:\n{template_text}"
-    }
+    system_message = {"role": "system", "content": f"다음 JSON 형식의 뉴스 목록을 아래 템플릿에 맞춰 출력하세요.\n템플릿:\n{template}"}
     user_message = {"role": "user", "content": str(items)}
-
     resp = openai.chat.completions.create(
         model="gpt-4o-mini",
         messages=[system_message, user_message],
@@ -342,7 +333,6 @@ def render_news():
         temperature=0.7
     )
     return jsonify(formatted_news=resp.choices[0].message.content)
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
