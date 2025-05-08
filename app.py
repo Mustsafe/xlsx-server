@@ -59,42 +59,40 @@ def build_alias_map(template_list: List[str]) -> dict:
 def resolve_keyword(raw: str, templates: List[str], alias_map: dict) -> str:
     key = raw.strip()
     norm = key.replace("_", " ").replace("-", " ").lower()
+    compact = norm.replace(" ", "")
 
-    # 1) 정확 일치
-    if key in templates or key in alias_map:
-        return alias_map.get(key, key)
+    # 정확 일치
+    if key in alias_map:
+        return alias_map[key]
     if norm in alias_map:
         return alias_map[norm]
 
-    # 2) JSA/LOTO 우선
-    compact = norm.replace(" ", "")
+    # JSA/LOTO 우선
     if "__FORCE_JSA__" in alias_map and ("jsa" in compact or "작업안전분석" in compact):
         return alias_map["__FORCE_JSA__"]
     if "__FORCE_LOTO__" in alias_map and "loto" in compact:
         return alias_map["__FORCE_LOTO__"]
 
-    # 3) 소문자·공백·언더바 제거 후 완전 일치
+    # 소문자·공백·언더바 제거 후 완전 일치
     for tpl in templates:
         if compact == tpl.lower().replace(" ", "").replace("_", ""):
             return tpl
 
-    # 4) 토큰 매칭
+    # 토큰 매칭
     tokens = norm.split()
     candidates = [t for t in templates if all(tok in t.lower() for tok in tokens)]
     if candidates:
-        # 점검표 우선
         for c in candidates:
             if c.endswith("점검표"):
                 return c
         return candidates[0]
 
-    # 5) 퍼지 매치
+    # 퍼지 매치
     keys = [t.replace(" ", "").replace("_", "").lower() for t in templates]
     match = difflib.get_close_matches(compact, keys, n=1, cutoff=0.75)
     if match:
         return templates[keys.index(match[0])]
 
-    # 찾을 수 없으면 예외
     raise ValueError(f"템플릿 '{raw}'을(를) 찾을 수 없습니다.")
 
 # ── 엔드포인트 ────────────────────────────────────────────────────────────────
@@ -111,7 +109,7 @@ def list_templates():
     csv_path = os.path.join(DATA_DIR, "통합_노지파일.csv")
     if not os.path.exists(csv_path):
         return jsonify(error="통합 CSV 파일이 없습니다."), 404
-    df = pd.read_csv(csv_path)
+    df = pd.read_csv(csv_path, encoding='utf-8-sig')
     templates = sorted(df["템플릿명"].dropna().unique())
     return jsonify({
         "template_list": templates,
@@ -120,80 +118,84 @@ def list_templates():
 
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
-    raw = request.args.get("template", "").strip()
-    csv_path = os.path.join(DATA_DIR, "통합_노지파일.csv")
-    if not os.path.exists(csv_path):
-        return jsonify(error="통합 CSV 파일이 없습니다."), 404
-
-    df = pd.read_csv(csv_path)
-    if "템플릿명" not in df.columns:
-        return jsonify(error="필요한 '템플릿명' 컬럼이 없습니다."), 500
-
-    templates = sorted(df["템플릿명"].dropna().unique().tolist())
-    alias_map = build_alias_map(templates)
-
     try:
-        tpl = resolve_keyword(raw, templates, alias_map)
-        out_df = df[df["템플릿명"] == tpl][["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]]
-    except ValueError:
-        # GPT fallback: 풍성한 5개 이상의 항목 강제
-        system_prompt = {
-            "role": "system",
-            "content": (
-                "당신은 산업안전 문서 템플릿 전문가입니다.\n"
-                "아래 컬럼 구조에 맞춰, **5개 이상의 항목**을 가진 순수 JSON 배열만 출력해주세요.\n"
-                "컬럼: 작업 항목, 작성 양식, 실무 예시 1, 실무 예시 2\n"
-                f"템플릿명: {raw}\n"
-                "각 항목마다 구체적이고 실무에 바로 적용 가능한 예시를 포함해주세요."
-            )
-        }
-        user_prompt = {
-            "role": "user",
-            "content": f"템플릿명 '{raw}'의 고도화된 양식을 JSON 배열로 주세요."
-        }
-        resp = openai.ChatCompletion.create(
-            model="gpt-4o-mini",
-            messages=[system_prompt, user_prompt],
-            max_tokens=800,
-            temperature=0.7
-        )
-        text = resp.choices[0].message.content
+        raw = request.args.get("template", "").strip()
+        csv_path = os.path.join(DATA_DIR, "통합_노지파일.csv")
+        if not os.path.exists(csv_path):
+            return jsonify(error="통합 CSV 파일이 없습니다."), 404
+
+        df = pd.read_csv(csv_path, encoding='utf-8-sig')
+        if "템플릿명" not in df.columns:
+            return jsonify(error="필요한 '템플릿명' 컬럼이 없습니다."), 500
+
+        templates = sorted(df["템플릿명"].dropna().unique().tolist())
+        alias_map = build_alias_map(templates)
+
         try:
-            data = json.loads(text)
-            out_df = pd.DataFrame(data)
-        except Exception as e:
-            logger.error(f"JSON 파싱 실패: {e}")
-            # 최소한 하나의 행이라도 반환
-            out_df = pd.DataFrame([{
-                "작업 항목": raw,
-                "작성 양식": text,
-                "실무 예시 1": "",
-                "실무 예시 2": ""
-            }])
+            tpl = resolve_keyword(raw, templates, alias_map)
+            out_df = df[df["템플릿명"] == tpl][["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]]
+        except ValueError:
+            # GPT fallback: 풍성한 5개 이상의 항목 강제
+            system_prompt = {
+                "role": "system",
+                "content": (
+                    "당신은 산업안전 문서 템플릿 전문가입니다.\n"
+                    "아래 컬럼 구조에 맞춰, **5개 이상의 항목**을 가진 순수 JSON 배열만 출력해주세요.\n"
+                    "컬럼: 작업 항목, 작성 양식, 실무 예시 1, 실무 예시 2\n"
+                    f"템플릿명: {raw}\n"
+                    "각 항목마다 구체적이고 실무에 바로 적용 가능한 예시를 포함해주세요."
+                )
+            }
+            user_prompt = {
+                "role": "user",
+                "content": f"템플릿명 '{raw}'의 고도화된 양식을 JSON 배열로 주세요."
+            }
+            resp = openai.ChatCompletion.create(
+                model="gpt-4o-mini",
+                messages=[system_prompt, user_prompt],
+                max_tokens=800,
+                temperature=0.7
+            )
+            text = resp.choices[0].message.content
+            try:
+                data = json.loads(text)
+                out_df = pd.DataFrame(data)
+            except Exception:
+                out_df = pd.DataFrame([{
+                    "작업 항목": raw,
+                    "작성 양식": text,
+                    "실무 예시 1": "",
+                    "실무 예시 2": ""
+                }])
 
-    # 엑셀 생성
-    wb = Workbook()
-    ws = wb.active
-    ws.append(["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"])
-    for cell in ws[1]:
-        cell.font = Font(bold=True)
-    for row in out_df.itertuples(index=False):
-        ws.append(row)
+        # 엑셀 생성
+        wb = Workbook()
+        ws = wb.active
+        ws.append(["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"])
+        for cell in ws[1]:
+            cell.font = Font(bold=True)
+        for row in out_df.itertuples(index=False):
+            ws.append(row)
 
-    buf = BytesIO()
-    wb.save(buf)
-    buf.seek(0)
+        buf = BytesIO()
+        wb.save(buf)
+        buf.seek(0)
 
-    fname = f"{tpl if 'tpl' in locals() else raw}.xlsx"
-    disposition = "attachment; filename*=UTF-8''" + quote(fname)
-    headers = {
-        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "Content-Disposition": disposition,
-        "Cache-Control": "public, max-age=3600"
-    }
-    return Response(buf.read(), headers=headers)
+        fname = f"{tpl if 'tpl' in locals() else raw}.xlsx"
+        disposition = "attachment; filename*=UTF-8''" + quote(fname)
+        headers = {
+            "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "Content-Disposition": disposition,
+            "Cache-Control": "public, max-age=3600"
+        }
+        return Response(buf.read(), headers=headers)
 
-# ── 뉴스 크롤링 / 렌더링 로직은 기존대로 유지합니다 ─────────────────────────────
+    except Exception as e:
+        # 어떤 에러라도 로깅 후 JSON으로 반환
+        logger.exception("create_xlsx 처리 중 오류 발생")
+        return jsonify(error=str(e)), 500
+
+# ── 뉴스 크롤링 / 렌더링 로직 (기존 그대로) ──────────────────────────────────
 def crawl_naver_news():
     base = "https://openapi.naver.com/v1/search/news.json"
     headers = {
@@ -292,5 +294,4 @@ def render_news():
     return jsonify(formatted_news=resp.choices[0].message.content)
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
