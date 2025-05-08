@@ -167,12 +167,14 @@ def create_xlsx():
             "role": "user",
             "content": f"템플릿명 '{raw}' 기본 양식 JSON으로 주세요."
         }
-        resp = openai.ChatCompletion.create(
+        from openai import ChatCompletion
+        resp = ChatCompletion.create(
             model="gpt-4o-mini",
             messages=[system_prompt, user_prompt],
             max_tokens=500,
             temperature=0.5,
-        )
+)
+
         data = json.loads(resp.choices[0].message.content)
         out_df = pd.DataFrame(data)
 
