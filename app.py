@@ -150,7 +150,7 @@ def create_xlsx():
                 "role": "user",
                 "content": f"템플릿명 '{raw}'의 고도화된 양식을 JSON 배열로 주세요."
             }
-            resp = openai.ChatCompletion.create(
+            resp = openai.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[system_prompt, user_prompt],
                 max_tokens=800,
@@ -191,7 +191,6 @@ def create_xlsx():
         return Response(buf.read(), headers=headers)
 
     except Exception as e:
-        # 어떤 에러라도 로깅 후 JSON으로 반환
         logger.exception("create_xlsx 처리 중 오류 발생")
         return jsonify(error=str(e)), 500
 
@@ -285,7 +284,7 @@ def render_news():
         "content":f"다음 JSON 형식의 뉴스 목록을 아래 템플릿에 맞춰 출력하세요.\n템플릿:\n{template}"
     }
     user_message = {"role":"user","content":str(items)}
-    resp = openai.ChatCompletion.create(
+    resp = openai.chat.completions.create(
         model="gpt-4o-mini",
         messages=[system_message, user_message],
         max_tokens=800,
