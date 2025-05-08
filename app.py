@@ -22,7 +22,7 @@ from openpyxl.utils import get_column_letter
 app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False
 
-openai.api_key = os.getenv("OPENAI_API_KEY")
+openai.api_key     = os.getenv("OPENAI_API_KEY")
 NAVER_CLIENT_ID     = os.getenv("NAVER_CLIENT_ID")
 NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
 
@@ -38,12 +38,13 @@ def build_alias_map(template_list: List[str]) -> dict:
         low  = tpl.lower()
         nosp = base.replace(" ", "").lower()
         # 기본 키
-        for key in {tpl, base, low, nosp, tpl.replace(" ", "_"), low.replace("_", " ")}:
-            alias[key] = tpl
+        keys = {tpl, base, low, nosp, tpl.replace(" ", "_"), low.replace("_", " ")}
+        for k in keys:
+            alias[k] = tpl
         # 접미사 키
         for suf in SUFFIXES:
-            for key in {base + suf, (base + suf).lower(), (base + suf).replace(" ", "_")}:
-                alias[key] = tpl
+            for k in {base + suf, (base + suf).lower(), (base + suf).replace(" ", "_")}:
+                alias[k] = tpl
     # JSA/LOTO 강제 매핑
     for tpl in template_list:
         norm = tpl.lower().replace(" ", "").replace("_", "")
@@ -70,12 +71,9 @@ def resolve_keyword(raw: str, templates: List[str], alias_map: dict) -> str:
     if "__FORCE_LOTO__" in alias_map and "loto" in cleaned:
         return alias_map["__FORCE_LOTO__"]
     # 2) 직접 매핑
-    if r in alias_map:
-        return alias_map[r]
-    if norm in alias_map:
-        return alias_map[norm]
-    if cleaned in alias_map:
-        return alias_map[cleaned]
+    for key in (r, norm, cleaned):
+        if key in alias_map:
+            return alias_map[key]
     # 3) prefix 매칭
     prefix_cands = [
         tpl for tpl in templates
@@ -83,7 +81,7 @@ def resolve_keyword(raw: str, templates: List[str], alias_map: dict) -> str:
     ]
     if len(prefix_cands) == 1:
         return prefix_cands[0]
-    # 4) 토큰 매칭
+    # 4) 토큰 매칭 (모든 토큰 포함)
     tokens = [t for t in norm.split() if t]
     tok_cands = [
         tpl for tpl in templates
@@ -92,17 +90,17 @@ def resolve_keyword(raw: str, templates: List[str], alias_map: dict) -> str:
     if len(tok_cands) == 1:
         return tok_cands[0]
     # 5) 부분 문자열 매칭
-    substr = [
+    substr_cands = [
         tpl for tpl in templates
         if cleaned in tpl.lower().replace(" ", "").replace("_", "")
     ]
-    if len(substr) == 1:
-        return substr[0]
+    if len(substr_cands) == 1:
+        return substr_cands[0]
     # 6) fuzzy 매칭
     norms = [t.replace(" ", "").replace("_", "").lower() for t in templates]
-    matches = difflib.get_close_matches(cleaned, norms, n=1, cutoff=0.6)
-    if matches:
-        return templates[norms.index(matches[0])]
+    match = difflib.get_close_matches(cleaned, norms, n=1, cutoff=0.6)
+    if match:
+        return templates[norms.index(match[0])]
     # 7) 없으면 에러
     raise ValueError(f"템플릿 '{raw}'을(를) 찾을 수 없습니다.")
 
@@ -132,6 +130,7 @@ def list_templates():
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
     raw = request.args.get("template", "").strip()
+    # “양식/서식/점검표/계획서/표 + (을|를)? + (주세요|줘)?” 제거
     raw = re.sub(
         r"\s*(?:양식|서식|점검표|계획서|표)(?:을|를)?\s*(?:주세요|줘)?$",
         "",
@@ -150,16 +149,18 @@ def create_xlsx():
     alias_map = build_alias_map(templates)
 
     try:
+        # 고도화된 템플릿 매칭 (prefix 우선)
         tpl = resolve_keyword(raw, templates, alias_map)
         out_df = df[df["템플릿명"] == tpl][
             ["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]
         ]
     except ValueError:
+        # 매칭 실패 → GPT Fallback(JSON)
         system = {
             "role": "system",
             "content": (
                 "당신은 산업안전 문서 템플릿 전문가입니다.\n"
-                "다음 JSON 배열로, 컬럼(작업 항목, 작성 양식, 실무 예시 1, 실무 예시 2)을 갖춘 양식을 5가지 이상 생성해주세요.\n"
+                "다음 컬럼(작업 항목, 작성 양식, 실무 예시 1, 실무 예시 2)을 가진 JSON 배열을 5개 이상 생성해주세요.\n"
                 f"템플릿명: {raw}"
             )
         }
@@ -178,6 +179,7 @@ def create_xlsx():
             data = json.loads(content)
             out_df = pd.DataFrame(data)
         except:
+            # 최소 1행 생성
             out_df = pd.DataFrame([{
                 "작업 항목": raw,
                 "작성 양식": content.replace("\n", " "),
@@ -197,12 +199,12 @@ def create_xlsx():
     for row in out_df.itertuples(index=False):
         ws.append(row)
 
-    # 자동 너비 & wrap_text
-    for i, col in enumerate(ws.columns, 1):
+    # 컬럼 너비 자동 조정 & 작성 양식 wrap_text
+    for idx, col in enumerate(ws.columns, 1):
         max_len = max(len(str(c.value)) for c in col)
-        letter = get_column_letter(i)
+        letter = get_column_letter(idx)
         ws.column_dimensions[letter].width = min(max_len + 2, 60)
-        if headers[i-1] == "작성 양식":
+        if headers[idx-1] == "작성 양식":
             for c in col[1:]:
                 c.alignment = Alignment(wrap_text=True)
 
@@ -232,11 +234,8 @@ def fetch_safetynews_article_content(url):
 
 def crawl_naver_news():
     base = "https://openapi.naver.com/v1/search/news.json"
-    headers = {
-        "X-Naver-Client-Id": NAVER_CLIENT_ID,
-        "X-Naver-Client-Secret": NAVER_CLIENT_SECRET
-    }
-    kws = ["건설 사고", "추락 사고", "끼임 사고", "질식 사고", "폭발 사고", "산업재해", "산업안전"]
+    headers = {"X-Naver-Client-Id": NAVER_CLIENT_ID, "X-Naver-Client-Secret": NAVER_CLIENT_SECRET}
+    kws = ["건설 사고","추락 사고","끼임 사고","질식 사고","폭발 사고","산업재해","산업안전"]
     out = []
     for kw in kws:
         r = requests.get(base, headers=headers, params={"query": kw, "display": 2, "sort": "date"}, timeout=10)
@@ -256,7 +255,7 @@ def crawl_naver_news():
 
 def crawl_safetynews():
     base = "https://www.safetynews.co.kr"
-    kws = ["건설 사고", "추락 사고", "끼임 사고", "질식 사고", "폭발 사고", "산업재해", "산업안전"]
+    kws = ["건설 사고","추락 사고","끼임 사고","질식 사고","폭발 사고","산업재해","산업안전"]
     out = []
     for kw in kws:
         r = requests.get(f"{base}/search/news?searchword={kw}", headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
@@ -307,12 +306,9 @@ def render_news():
         "{본문}\n"
         "🔎 더 보려면 “뉴스 더 보여줘”를 입력하세요."
     )
-    system_msg = {
-        "role": "system",
-        "content": f"다음 JSON 형식의 뉴스 목록을 아래 템플릿에 맞춰 출력하세요.\n템플릿:\n{template}"
-    }
-    user_msg = {"role": "user", "content": str(items)}
-    resp = openai.chat.completions.create(
+    system_msg = {"role": "system", "content": f"다음 JSON 형식의 뉴스 목록을 아래 템플릿에 맞춰 출력하세요.\n템플릿:\n{template}"}
+    user_msg   = {"role": "user",   "content": str(items)}
+    resp       = openai.chat.completions.create(
         model="gpt-4o-mini",
         messages=[system_msg, user_msg],
         max_tokens=800,
