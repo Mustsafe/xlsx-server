@@ -156,27 +156,23 @@ def create_xlsx():
         logger.info(f"Template matched: {tpl}")
         filtered = df[df["템플릿명"] == tpl]
         out_df = filtered[["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]]
-    except ValueError as e:
+        except ValueError as e:
         logger.warning(f"Template resolve failed for {raw}: {e}")
         system_prompt = {
             "role": "system",
-            "content": (
-                "당신은 산업안전 문서 전문가입니다. 요청된 템플릿이 등록되어 있지 않을 때, "
-                "다음 JSON 배열 형태로 기본 양식을 생성해 주세요:
-"
-                "[
-"
-                "  {"작업 항목": "...", "작성 양식": "...", "실무 예시 1": "...", "실무 예시 2": "..."},
-"
-                "  {...}
-"
-                "]
-"
-                f"템플릿명: {raw}
-"
-            )
+            "content": f"""당신은 산업안전 문서 전문가입니다. 요청된 템플릿이 등록되어 있지 않을 때,
+다음 JSON 배열 형태로 기본 양식을 생성해 주세요:
+[
+  {{"작업 항목": "...", "작성 양식": "...", "실무 예시 1": "...", "실무 예시 2": "..."}},
+  {{...}}
+]
+템플릿명: {raw}
+"""
         }
-        user_prompt = {"role": "user", "content": f"템플릿명 '{raw}' 기본 양식 JSON으로 주세요."}
+        user_prompt = {
+            "role": "user",
+            "content": f"템플릿명 '{raw}' 기본 양식 JSON으로 주세요."
+        }
         resp = openai.ChatCompletion.create(
             model="gpt-4o-mini",
             messages=[system_prompt, user_prompt],
