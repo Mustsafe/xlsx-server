@@ -216,7 +216,7 @@ def create_xlsx():
                 "실무 예시 1": "",
                 "실무 예시 2": ""
             }])
-
+            
     # === 공통: 결과를 고도화된 표 형식으로 엑셀 변환하여 응답 (openpyxl 사용) ===
     from openpyxl import Workbook
     from openpyxl.styles import Font
@@ -362,13 +362,14 @@ def render_news():
         "content":f"다음 JSON 형식의 뉴스 목록을 아래 템플릿에 맞춰 출력하세요.\n템플릿:\n{template_text}"
     }
     user_message = {"role":"user","content":str(news_items)}
-
+    
     resp = openai.chat.completions.create(
         model="gpt-4o-mini",
-        messages=[system_prompt, user_prompt],
-        max_tokens=500,
-        temperature=0.5,
-)
+        messages=[system_message, user_message],
+        max_tokens=800,
+        temperature=0.7,
+    )
+
 
     return jsonify(formatted_news=resp.choices[0].message.content)
 
