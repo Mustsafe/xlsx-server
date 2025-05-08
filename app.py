@@ -146,78 +146,53 @@ def serve_logo():
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
     raw = request.args.get("template", "")
-    logger.info(f"create_xlsx called with template={raw}")
-
     csv_path = os.path.join(DATA_DIR, "통합_노지파일.csv")
-    if not os.path.exists(csv_path):
-        return jsonify(error="통합 CSV 파일이 없습니다."), 404
     df = pd.read_csv(csv_path)
-    if "템플릿명" not in df.columns:
-        return jsonify(error="필요한 '템플릿명' 컬럼이 없습니다."), 500
-
     templates = sorted(df["템플릿명"].dropna().unique().tolist())
     alias_map = build_alias_map(templates)
 
+    # 1) 먼저 기존 매핑 로직(백업된 버전) 그대로 적용
     try:
         tpl = resolve_keyword(raw, templates, alias_map)
-        logger.info(f"Template matched: {tpl}")
         out_df = df[df["템플릿명"] == tpl][["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]]
     except ValueError:
-        logger.warning(f"Template '{raw}' not found → GPT fallback")
-        system_prompt = {
+        # 2) GPT fallback: JSON → DataFrame → 네 컬럼 강제 분리
+        system = {
             "role": "system",
             "content": (
-                "당신은 산업안전 문서 템플릿 전문가입니다.\n"
-                "아래 컬럼 구조에 맞춰 5개 이상의 항목을 가진 순수 JSON 배열만 출력해주세요.\n"
-                "컬럼: 작업 항목, 작성 양식, 실무 예시 1, 실무 예시 2\n"
-                f"템플릿명: {raw}\n"
-                "추가 설명 없이 JSON 배열만 출력하세요."
+                "당신은 산업안전 문서 전문가입니다. 등록되지 않은 템플릿 요청 시 "
+                "4개 컬럼(작업 항목, 작성 양식, 실무 예시 1, 실무 예시 2)으로 구성된 JSON 배열을 "
+                "리턴해주세요. 추가 설명 없이 순수 JSON만."
             )
         }
-        user_prompt = {
-            "role": "user",
-            "content": f"템플릿명 '{raw}'의 기본 양식을 JSON 배열로 주세요."
-        }
+        user = {"role": "user", "content": f"템플릿명 '{raw}' 양식을 JSON으로 주세요."}
         resp = openai.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[system_prompt, user_prompt],
-            max_tokens=800,
-            temperature=0.5
+            messages=[system, user],
+            max_tokens=600,
+            temperature=0.5,
         )
-        text = resp.choices[0].message.content
-        try:
-            data = json.loads(text)
-            out_df = pd.DataFrame(data)
-        except Exception as e:
-            logger.error(f"JSON parse failed: {e}\n{text}")
-            out_df = pd.DataFrame([{
-                "작업 항목": raw,
-                "작성 양식": text,
-                "실무 예시 1": "",
-                "실무 예시 2": ""
-            }])
+        data = json.loads(resp.choices[0].message.content)
+        # 강제 4컬럼 분리
+        out_df = pd.DataFrame(data)
+        out_df = out_df.reindex(columns=["작업 항목","작성 양식","실무 예시 1","실무 예시 2"])
 
-    # Excel 파일 생성
+    # 엑셀 생성 (컬럼별로 제대로 들어갑니다)
     wb = Workbook()
     ws = wb.active
-    ws.append(["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"])
-    for cell in ws[1]:
-        cell.font = Font(bold=True)
+    ws.append(out_df.columns.tolist())
     for row in out_df.itertuples(index=False):
         ws.append(row)
-
     buffer = BytesIO()
     wb.save(buffer)
     buffer.seek(0)
-
-    filename = f"{tpl if 'tpl' in locals() else raw}.xlsx"
-    disposition = "attachment; filename*=UTF-8''" + quote(filename)
-    headers = {
-        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "Content-Disposition": disposition,
-        "Cache-Control": "public, max-age=3600"
-    }
-    return Response(buffer.read(), headers=headers)
+    return Response(
+        buffer.read(),
+        headers={
+            "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "Content-Disposition": f"attachment; filename*=UTF-8''{tpl if 'tpl' in locals() else raw}.xlsx"
+        }
+    )
 
 @app.route("/list_templates", methods=["GET"])
 def list_templates():
@@ -295,10 +270,8 @@ def get_daily_news():
 @app.route("/render_news", methods=["GET"])
 def render_news():
     news = crawl_naver_news() + crawl_safetynews()
-    if not news:
-        return jsonify(error="가져올 뉴스가 없습니다."), 200
     cutoff = datetime.utcnow() - timedelta(days=3)
-    filtered = []
+    items = []
     for n in news:
         try:
             dt = parser.parse(n["날짜"])
@@ -306,26 +279,30 @@ def render_news():
             continue
         if dt >= cutoff:
             n["날짜"] = dt.strftime("%Y.%m.%d")
-            filtered.append(n)
-    items = sorted(filtered, key=lambda x: parser.parse(x["날짜"]), reverse=True)[:3]
+            items.append(n)
+    items = sorted(items, key=lambda x: parser.parse(x["날짜"]), reverse=True)[:3]
     if not items:
         return jsonify(error="가져올 뉴스가 없습니다."), 200
+
     template = (
         "📌 산업 안전 및 보건 최신 뉴스\n"
-        "📰 “{title}” ({date}, {출처})\n\n"
+        "📰 “{title}” ({날짜}, {출처})\n\n"
         "{본문}\n"
         "🔎 더 보려면 “뉴스 더 보여줘”를 입력하세요."
     )
     system_message = {
         "role": "system",
-        "content": f"다음 JSON 형식의 뉴스 목록을 아래 템플릿에 맞춰 출력하세요.\n템플릿:\n{template}"
+        "content": (
+            "다음 JSON 형식의 뉴스 목록을 아래 템플릿에 맞춰 출력하세요.\n"
+            f"템플릿:\n{template}"
+        )
     }
-    user_message = {"role": "user", "content": str(items)}
+    user_message = {"role": "user", "content": json.dumps(items, ensure_ascii=False)}
     resp = openai.chat.completions.create(
         model="gpt-4o-mini",
         messages=[system_message, user_message],
         max_tokens=800,
-        temperature=0.7
+        temperature=0.7,
     )
     return jsonify(formatted_news=resp.choices[0].message.content)
 
