@@ -190,9 +190,9 @@ def create_xlsx():
         try:
             resp = openai.chat.completions.create(
                 model="gpt-4o-mini",
-                messages=[system_prompt, user_prompt],
+                messages=[system_message, user_message],
                 max_tokens=800,
-                temperature=0.5,
+                temperature=0.7,
             )
             text = resp.choices[0].message.content
 
@@ -217,7 +217,7 @@ def create_xlsx():
                 "실무 예시 2": ""
             }])
 
-        # 결과를 고도화된 표 형식으로 엑셀 변환하여 응답 (openpyxl 사용)
+    # === 공통: 결과를 고도화된 표 형식으로 엑셀 변환하여 응답 (openpyxl 사용) ===
     from openpyxl import Workbook
     from openpyxl.styles import Font
 
