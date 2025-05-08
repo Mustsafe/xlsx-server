@@ -306,12 +306,13 @@ def render_news():
     }
     user_message = {"role":"user","content":str(news_items)}
 
-    resp = openai.ChatCompletion.create(
+    resp = openai.chat.completions.create(
         model="gpt-4o-mini",
-        messages=[system_message, user_message],
-        max_tokens=800,
-        temperature=0.7
-    )
+        messages=[system_prompt, user_prompt],
+        max_tokens=500,
+        temperature=0.5,
+)
+
     return jsonify(formatted_news=resp.choices[0].message.content)
 
 if __name__ == "__main__":
