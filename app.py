@@ -148,14 +148,14 @@ def create_xlsx():
     template_list = sorted(df["템플릿명"].dropna().unique().tolist())
     alias_map      = build_alias_map(template_list)
 
+    # 1) 등록된 템플릿 lookup
     try:
-        # 기존 등록된 템플릿 조회
         tpl = resolve_keyword(raw, template_list, alias_map)
         logger.info(f"Template matched: {tpl}")
         filtered = df[df["템플릿명"] == tpl]
         out_df   = filtered[["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]]
-        except ValueError:
-        # 미등록 템플릿일 경우 GPT에 고도화 양식 수준으로 요청
+    # 2) 미등록 템플릿일 때 GPT로 fallback
+    except ValueError:
         logger.warning(f"Template '{raw}' not found → using GPT fallback")
 
         system_prompt = {
@@ -209,6 +209,22 @@ def create_xlsx():
                 "실무 예시 1": "",
                 "실무 예시 2": ""
             }])
+
+    # 결과를 엑셀로 변환하여 응답
+    buffer = BytesIO()
+    out_df.to_excel(buffer, index=False)
+    buffer.seek(0)
+    logger.info(f"Response ready for template={raw}")
+
+    filename    = f"{tpl if 'tpl' in locals() else raw}.xlsx"
+    disposition = "attachment; filename*=UTF-8''" + quote(filename)
+    headers     = {
+        "Content-Type":        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Disposition": disposition,
+        "Cache-Control":       "public, max-age=3600"
+    }
+    return Response(buffer.read(), headers=headers)
+
 
 @app.route("/list_templates", methods=["GET"])
 def list_templates():
