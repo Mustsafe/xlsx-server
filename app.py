@@ -151,7 +151,7 @@ def create_xlsx():
         out_df = filtered[["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]]
     except ValueError as e:
         logger.warning(f"Template resolve failed for {raw}: {e}")
-                system_prompt = {
+        system_prompt = {
             "role": "system",
             "content": (
                 f"당신은 산업안전 문서 전문가입니다. 요청된 템플릿이 등록되어 있지 않을 때, "
