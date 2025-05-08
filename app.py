@@ -187,36 +187,27 @@ def create_xlsx():
         }
 
         # GPT 호출 (v1 인터페이스)
-        try:
-            resp = openai.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[system_prompt, user_prompt],
-                max_tokens=800,
-                temperature=0.7,
-            )
-            text = resp.choices[0].message.content
+        resp = openai.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[system_prompt, user_prompt],
+            max_tokens=800,
+            temperature=0.5,
+        )
+        text = resp.choices[0].message.content
 
-            # JSON 파싱 시도
-            try:
-                data = json.loads(text)
-                out_df = pd.DataFrame(data)
-            except Exception as parse_err:
-                logger.error(f"Fallback JSON parsing failed: {parse_err}\nContent: {text}")
-                out_df = pd.DataFrame([{
-                    "작업 항목": raw,
-                    "작성 양식": text,
-                    "실무 예시 1": "",
-                    "실무 예시 2": ""
-                }])
-        except Exception as llm_err:
-            logger.error(f"GPT call failed: {llm_err}")
+        # JSON 파싱 시도
+        try:
+            data = json.loads(text)
+            out_df = pd.DataFrame(data)
+        except Exception as parse_err:
+            logger.error(f"Fallback JSON parsing failed: {parse_err}\nContent: {text}")
             out_df = pd.DataFrame([{
                 "작업 항목": raw,
-                "작성 양식": "",
+                "작성 양식": text,
                 "실무 예시 1": "",
                 "실무 예시 2": ""
             }])
-            
+
     # === 공통: 결과를 고도화된 표 형식으로 엑셀 변환하여 응답 (openpyxl 사용) ===
     from openpyxl import Workbook
     from openpyxl.styles import Font
@@ -261,8 +252,7 @@ def list_templates():
         "alias_keys": sorted(build_alias_map(sorted(df["템플릿명"].dropna().unique())).keys())
     })
 
-# 뉴스 크롤링 유틸 및 엔드포인트
-
+# 이하 뉴스 크롤링 엔드포인트 (변경 없음)
 def fetch_safetynews_article_content(url):
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -279,8 +269,7 @@ def crawl_naver_news():
         "X-Naver-Client-Id":     NAVER_CLIENT_ID,
         "X-Naver-Client-Secret": NAVER_CLIENT_SECRET
     }
-    keywords = ["건설 사고","추락 사고","끼임 사고","질식 사고",
-                "폭발 사고","산업재해","산업안전"]
+    keywords = ["건설 사고","추락 사고","끼임 사고","질식 사고","폭발 사고","산업재해","산업안전"]
     out = []
     for kw in keywords:
         params = {"query": kw, "display": 2, "sort": "date"}
@@ -301,8 +290,7 @@ def crawl_naver_news():
 
 def crawl_safetynews():
     base     = "https://www.safetynews.co.kr"
-    keywords = ["건설 사고","추락 사고","끼임 사고","질식 사고",
-                "폭발 사고","산업재해","산업안전"]
+    keywords = ["건설 사고","추락 사고","끼임 사고","질식 사고","폭발 사고","산업재해","산업안전"]
     out = []
     for kw in keywords:
         resp = requests.get(f"{base}/search/news?searchword={kw}",
@@ -345,9 +333,7 @@ def render_news():
             n["날짜"] = dt.strftime("%Y.%m.%d")
             filtered.append(n)
 
-    news_items = sorted(filtered,
-                        key=lambda x: parser.parse(x["날짜"]),
-                        reverse=True)[:3]
+    news_items = sorted(filtered, key=lambda x: parser.parse(x["날짜"]), reverse=True)[:3]
     if not news_items:
         return jsonify(error="가져올 뉴스가 없습니다."), 200
 
@@ -358,18 +344,17 @@ def render_news():
         "🔎 더 보려면 “뉴스 더 보여줘”를 입력하세요."
     )
     system_message = {
-        "role":"system",
-        "content":f"다음 JSON 형식의 뉴스 목록을 아래 템플릿에 맞춰 출력하세요.\n템플릿:\n{template_text}"
+        "role": "system",
+        "content": f"다음 JSON 형식의 뉴스 목록을 아래 템플릿에 맞춰 출력하세요.\n템플릿:\n{template_text}"
     }
     user_message = {"role":"user","content":str(news_items)}
-    
+
     resp = openai.chat.completions.create(
         model="gpt-4o-mini",
         messages=[system_message, user_message],
         max_tokens=800,
         temperature=0.7,
     )
-
 
     return jsonify(formatted_news=resp.choices[0].message.content)
 
