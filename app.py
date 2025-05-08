@@ -44,11 +44,11 @@ def build_alias_map(template_list: List[str]) -> dict:
         low = tpl.lower()
         alias[low] = tpl
         alias[low.replace("_", " ")] = tpl
-        base_space = tpl.replace("_", " ")
-        nospace = base_space.replace(" ", "").lower()
+        base = tpl.replace("_", " ")
+        nospace = base.replace(" ", "").lower()
         alias[nospace] = tpl
         for suf in SUFFIXES:
-            combo = base_space + suf
+            combo = base + suf
             alias[combo] = tpl
             alias[combo.replace(" ", "_")] = tpl
             alias[combo.lower()] = tpl
@@ -58,60 +58,60 @@ def build_alias_map(template_list: List[str]) -> dict:
             alias["__FORCE_JSA__"] = tpl
         if "loto" in norm:
             alias["__FORCE_LOTO__"] = tpl
-    temp = {}
+    # 공백/언더바 버전 추가
+    extra = {}
     for k, v in alias.items():
-        temp[k.replace(" ", "_")] = v
-        temp[k.replace("_", " ")] = v
-    alias.update(temp)
+        extra[k.replace(" ", "_")] = v
+        extra[k.replace("_", " ")] = v
+    alias.update(extra)
     return alias
 
-def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict) -> str:
-    raw = raw_keyword.strip()
-    norm = raw.replace("_", " ").replace("-", " ")
-    key_lower = norm.lower()
-    cleaned = key_lower.replace(" ", "")
+def resolve_keyword(raw: str, templates: List[str], alias_map: dict) -> str:
+    key = raw.strip()
+    norm = key.replace("_", " ").replace("-", " ").lower()
+    compact = norm.replace(" ", "")
 
-    # 0) 정확 일치 (원문 혹은 언더바/공백 변환)
-    for tpl in template_list:
-        if raw == tpl or raw.replace("_", " ") == tpl or raw.replace(" ", "_") == tpl:
+    # 0) 정확 일치 우선
+    for tpl in templates:
+        if key == tpl or key.replace("_", " ") == tpl or key.replace(" ", "_") == tpl:
             return tpl
 
-    # 1) JSA/LOTO 최우선
-    if "__FORCE_JSA__" in alias_map and ("jsa" in cleaned or "작업안전분석" in cleaned):
+    # 1) JSA/LOTO 예외
+    if "__FORCE_JSA__" in alias_map and ("jsa" in compact or "작업안전분석" in compact):
         return alias_map["__FORCE_JSA__"]
-    if "__FORCE_LOTO__" in alias_map and "loto" in cleaned:
+    if "__FORCE_LOTO__" in alias_map and "loto" in compact:
         return alias_map["__FORCE_LOTO__"]
 
     # 2) 소문자·공백·언더바 제거 후 완전 일치
-    for tpl in template_list:
-        if key_lower == tpl.lower().replace(" ", "").replace("_", ""):
+    for tpl in templates:
+        if compact == tpl.lower().replace(" ", "").replace("_", ""):
             return tpl
 
-    # 3) 토큰 매칭 (모든 토큰을 포함하는 템플릿)
-    tokens = [t for t in key_lower.split() if t]
-    candidates = [tpl for tpl in template_list if all(tok in tpl.lower() for tok in tokens)]
+    # 3) 토큰 매칭
+    tokens = norm.split()
+    candidates = [t for t in templates if all(tok in t.lower() for tok in tokens)]
     if len(candidates) == 1:
         return candidates[0]
     if len(candidates) > 1:
-        # “밀폐공간작업” 같은 경우 점검표 우선
+        # 점검표 우선
         for c in candidates:
             if c.endswith("점검표"):
                 return c
         return candidates[0]
 
     # 4) alias 맵
-    if raw in alias_map:
-        return alias_map[raw]
-    if key_lower in alias_map:
-        return alias_map[key_lower]
+    if key in alias_map:
+        return alias_map[key]
+    if norm in alias_map:
+        return alias_map[norm]
 
     # 5) 퍼지 매치
-    tpl_keys = [tpl.replace(" ", "").replace("_", "").lower() for tpl in template_list]
-    matches = difflib.get_close_matches(cleaned, tpl_keys, n=1, cutoff=0.75)
-    if matches:
-        return template_list[tpl_keys.index(matches[0])]
+    keys = [t.replace(" ", "").replace("_", "").lower() for t in templates]
+    match = difflib.get_close_matches(compact, keys, n=1, cutoff=0.75)
+    if match:
+        return templates[keys.index(match[0])]
 
-    raise ValueError(f"템플릿 '{raw_keyword}'을(를) 찾을 수 없습니다.")
+    raise ValueError(f"템플릿 '{raw}'을(를) 찾을 수 없습니다.")
 
 @app.route("/", methods=["GET"])
 def index():
@@ -124,29 +124,23 @@ def health_check():
 
 @app.route("/.well-known/<path:filename>")
 def serve_well_known(filename):
-    logger.info(f"Serving well-known file: {filename}")
     return send_from_directory(
         os.path.join(app.root_path, "static", ".well-known"),
-        filename,
-        mimetype="application/json"
+        filename, mimetype="application/json"
     )
 
 @app.route("/openapi.json")
 def serve_openapi():
-    logger.info("Serving openapi.json")
     return send_from_directory(
         os.path.join(app.root_path, "static"),
-        "openapi.json",
-        mimetype="application/json"
+        "openapi.json", mimetype="application/json"
     )
 
 @app.route("/logo.png")
 def serve_logo():
-    logger.info("Serving logo.png")
     return send_from_directory(
         os.path.join(app.root_path, "static"),
-        "logo.png",
-        mimetype="image/png"
+        "logo.png", mimetype="image/png"
     )
 
 @app.route("/create_xlsx", methods=["GET"])
@@ -156,30 +150,28 @@ def create_xlsx():
 
     csv_path = os.path.join(DATA_DIR, "통합_노지파일.csv")
     if not os.path.exists(csv_path):
-        logger.error("통합 CSV 파일이 없습니다.")
         return jsonify(error="통합 CSV 파일이 없습니다."), 404
-
     df = pd.read_csv(csv_path)
     if "템플릿명" not in df.columns:
-        logger.error("필요한 '템플릿명' 컬럼이 없습니다.")
         return jsonify(error="필요한 '템플릿명' 컬럼이 없습니다."), 500
 
-    template_list = sorted(df["템플릿명"].dropna().unique().tolist())
-    alias_map = build_alias_map(template_list)
+    templates = sorted(df["템플릿명"].dropna().unique().tolist())
+    alias_map = build_alias_map(templates)
 
     try:
-        tpl = resolve_keyword(raw, template_list, alias_map)
+        tpl = resolve_keyword(raw, templates, alias_map)
         logger.info(f"Template matched: {tpl}")
         out_df = df[df["템플릿명"] == tpl][["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]]
     except ValueError:
-        logger.warning(f"Template '{raw}' not found → falling back to GPT")
+        logger.warning(f"Template '{raw}' not found → GPT fallback")
         system_prompt = {
             "role": "system",
             "content": (
-                "당신은 산업안전 분야 문서 템플릿 전문가입니다.\n"
+                "당신은 산업안전 문서 템플릿 전문가입니다.\n"
                 "아래 컬럼 구조에 맞춰 5개 이상의 항목을 가진 순수 JSON 배열만 출력해주세요.\n"
                 "컬럼: 작업 항목, 작성 양식, 실무 예시 1, 실무 예시 2\n"
-                f"템플릿명: {raw}"
+                f"템플릿명: {raw}\n"
+                "추가 설명 없이 JSON 배열만 출력하세요."
             )
         }
         user_prompt = {
@@ -197,7 +189,7 @@ def create_xlsx():
             data = json.loads(text)
             out_df = pd.DataFrame(data)
         except Exception as e:
-            logger.error(f"JSON 파싱 실패: {e}\n응답 내용: {text}")
+            logger.error(f"JSON parse failed: {e}\n{text}")
             out_df = pd.DataFrame([{
                 "작업 항목": raw,
                 "작성 양식": text,
@@ -229,7 +221,6 @@ def create_xlsx():
 
 @app.route("/list_templates", methods=["GET"])
 def list_templates():
-    logger.info("list_templates called")
     csv_path = os.path.join(DATA_DIR, "통합_노지파일.csv")
     if not os.path.exists(csv_path):
         return jsonify(error="통합 CSV 파일이 없습니다."), 404
@@ -255,32 +246,30 @@ def crawl_naver_news():
         "X-Naver-Client-Id": NAVER_CLIENT_ID,
         "X-Naver-Client-Secret": NAVER_CLIENT_SECRET
     }
-    kws = ["건설 사고", "추락 사고", "끼임 사고", "질식 사고", "폭발 사고", "산업재해", "산업안전"]
+    kws = ["건설 사고","추락 사고","끼임 사고","질식 사고","폭발 사고","산업재해","산업안전"]
     out = []
     for kw in kws:
-        r = requests.get(base, headers=headers, params={"query": kw, "display": 2, "sort": "date"}, timeout=10)
-        if r.status_code != 200:
-            continue
+        r = requests.get(base, headers=headers, params={"query":kw,"display":2,"sort":"date"}, timeout=10)
+        if r.status_code != 200: continue
         for item in r.json().get("items", []):
             title = BeautifulSoup(item["title"], "html.parser").get_text()
-            desc = BeautifulSoup(item["description"], "html.parser").get_text()
+            desc  = BeautifulSoup(item["description"], "html.parser").get_text()
             out.append({
-                "출처": item.get("originallink", "네이버"),
+                "출처": item.get("originallink","네이버"),
                 "제목": title,
-                "링크": item.get("link", ""),
-                "날짜": item.get("pubDate", ""),
+                "링크": item.get("link",""),
+                "날짜": item.get("pubDate",""),
                 "본문": desc
             })
     return out
 
 def crawl_safetynews():
     base = "https://www.safetynews.co.kr"
-    kws = ["건설 사고", "추락 사고", "끼임 사고", "질식 사고", "폭발 사고", "산업재해", "산업안전"]
+    kws = ["건설 사고","추락 사고","끼임 사고","질식 사고","폭발 사고","산업재해","산업안전"]
     out = []
     for kw in kws:
-        r = requests.get(f"{base}/search/news?searchword={kw}", headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
-        if r.status_code != 200:
-            continue
+        r = requests.get(f"{base}/search/news?searchword={kw}", headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
+        if r.status_code != 200: continue
         soup = BeautifulSoup(r.text, "html.parser")
         for item in soup.select(".article-list-content")[:2]:
             t = item.select_one(".list-titles")
@@ -308,7 +297,6 @@ def render_news():
     news = crawl_naver_news() + crawl_safetynews()
     if not news:
         return jsonify(error="가져올 뉴스가 없습니다."), 200
-
     cutoff = datetime.utcnow() - timedelta(days=3)
     filtered = []
     for n in news:
@@ -319,11 +307,9 @@ def render_news():
         if dt >= cutoff:
             n["날짜"] = dt.strftime("%Y.%m.%d")
             filtered.append(n)
-
     items = sorted(filtered, key=lambda x: parser.parse(x["날짜"]), reverse=True)[:3]
     if not items:
         return jsonify(error="가져올 뉴스가 없습니다."), 200
-
     template = (
         "📌 산업 안전 및 보건 최신 뉴스\n"
         "📰 “{title}” ({date}, {출처})\n\n"
