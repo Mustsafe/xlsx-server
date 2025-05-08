@@ -154,50 +154,61 @@ def create_xlsx():
         logger.info(f"Template matched: {tpl}")
         filtered = df[df["템플릿명"] == tpl]
         out_df   = filtered[["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]]
-    except ValueError:
-        # 미등록 템플릿일 경우 GPT에 기본 스켈레톤 요청
-        logger.warning(f"Template not found, falling back to GPT: {raw}")
+        except ValueError:
+        # 미등록 템플릿일 경우 GPT에 고도화 양식 수준으로 요청
+        logger.warning(f"Template '{raw}' not found → using GPT fallback")
+
         system_prompt = {
             "role": "system",
             "content": (
-                f"당신은 산업안전 문서 전문가입니다. 요청된 템플릿이 등록되어 있지 않을 때, "
-                f"다음 JSON 배열 형태로 기본 양식을 생성해 주세요:\n"
-                "[\n"
-                "  {\"작업 항목\": \"...\", \"작성 양식\": \"...\", \"실무 예시 1\": \"...\", \"실무 예시 2\": \"...\"},\n"
-                "  {...}\n"
-                "]\n"
+                "당신은 산업안전 분야 문서 템플릿 전문가입니다. "
+                "아래 컬럼 구조와 작성 스타일을 반드시 준수하여, "
+                "요청된 템플릿명이 등록되어 있지 않을 때 **5개 이상의** 항목을 갖춘 JSON 배열을 생성해주세요.\n\n"
+                "컬럼 구조:\n"
+                "  • 작업 항목 (섹션 제목)\n"
+                "  • 작성 양식 (간결·명확한 작성 지침)\n"
+                "  • 실무 예시 1 (현장 활용 예시)\n"
+                "  • 실무 예시 2 (추가 활용 예시)\n\n"
                 f"템플릿명: {raw}\n"
             )
         }
         user_prompt = {
             "role": "user",
-            "content": f"템플릿명 '{raw}' 기본 양식을 JSON으로 주세요."
+            "content": f"템플릿명 '{raw}'에 대한 기본 양식을 JSON으로 제공해 주세요."
         }
 
-        # GPT v1 인터페이스로 호출
-        resp = openai.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[system_prompt, user_prompt],
-            max_tokens=500,
-            temperature=0.5,
-        )
-        data = resp.choices[0].message.content
-        out_df = pd.DataFrame(json.loads(data))
+        # 1) GPT 호출 (v1 인터페이스)
+        try:
+            resp = openai.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[system_prompt, user_prompt],
+                max_tokens=800,
+                temperature=0.5,
+            )
+            text = resp.choices[0].message.content
 
-    # 결과를 엑셀로 변환하여 응답
-    buffer = BytesIO()
-    out_df.to_excel(buffer, index=False)
-    buffer.seek(0)
-    logger.info(f"Response ready for template={raw}")
-
-    filename    = f"{raw}.xlsx"
-    disposition = "attachment; filename*=UTF-8''" + quote(filename)
-    headers     = {
-        "Content-Type":        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "Content-Disposition": disposition,
-        "Cache-Control":       "public, max-age=3600"
-    }
-    return Response(buffer.read(), headers=headers)
+            # 2) JSON 파싱 시도
+            try:
+                data = json.loads(text)
+                out_df = pd.DataFrame(data)
+            except Exception as parse_err:
+                logger.error(f"Fallback JSON parsing failed: {parse_err}\nContent: {text}")
+                # 비정형 텍스트라도 제공
+                out_df = pd.DataFrame([{
+                    "작업 항목": raw,
+                    "작성 양식": text,
+                    "실무 예시 1": "",
+                    "실무 예시 2": ""
+                }])
+        except Exception as llm_err:
+            logger.error(f"GPT call failed: {llm_err}")
+            # LLM 호출 자체 실패 시에도 최소 스켈레톤 반환
+            out_df = pd.DataFrame([{
+                "작업 항목": raw,
+                "작성 양식": "",
+                "실무 예시 1": "",
+                "실무 예시 2": ""
+            }])
 
 @app.route("/list_templates", methods=["GET"])
 def list_templates():
