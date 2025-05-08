@@ -134,60 +134,68 @@ def index():
 def create_xlsx():
     raw = request.args.get("template", "")
     logger.info(f"create_xlsx called with template={raw}")
+
     csv_path = os.path.join(DATA_DIR, "통합_노지파일.csv")
     if not os.path.exists(csv_path):
         logger.error("통합 CSV 파일이 없습니다.")
         return jsonify(error="통합 CSV 파일이 없습니다."), 404
+
     df = pd.read_csv(csv_path)
     if "템플릿명" not in df.columns:
         logger.error("필요한 '템플릿명' 컬럼이 없습니다.")
         return jsonify(error="필요한 '템플릿명' 컬럼이 없습니다."), 500
+
     template_list = sorted(df["템플릿명"].dropna().unique().tolist())
-    alias_map = build_alias_map(template_list)
+    alias_map      = build_alias_map(template_list)
+
     try:
+        # 기존 등록된 템플릿 조회
         tpl = resolve_keyword(raw, template_list, alias_map)
         logger.info(f"Template matched: {tpl}")
         filtered = df[df["템플릿명"] == tpl]
-        out_df = filtered[["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]]
-    except ValueError as e:
-        logger.warning(f"Template resolve failed for {raw}: {e}")
+        out_df   = filtered[["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]]
+    except ValueError:
+        # 미등록 템플릿일 경우 GPT에 기본 스켈레톤 요청
+        logger.warning(f"Template not found, falling back to GPT: {raw}")
         system_prompt = {
             "role": "system",
             "content": (
                 f"당신은 산업안전 문서 전문가입니다. 요청된 템플릿이 등록되어 있지 않을 때, "
                 f"다음 JSON 배열 형태로 기본 양식을 생성해 주세요:\n"
-                f"[\n"
-                f"  {{\"작업 항목\": \"...\", \"작성 양식\": \"...\", \"실무 예시 1\": \"...\", \"실무 예시 2\": \"...\"}},\n"
-                f"  {{...}}\n"
-                f"]\n"
+                "[\n"
+                "  {\"작업 항목\": \"...\", \"작성 양식\": \"...\", \"실무 예시 1\": \"...\", \"실무 예시 2\": \"...\"},\n"
+                "  {...}\n"
+                "]\n"
                 f"템플릿명: {raw}\n"
             )
         }
         user_prompt = {
             "role": "user",
-            "content": f"템플릿명 '{raw}' 기본 양식 JSON으로 주세요."
+            "content": f"템플릿명 '{raw}' 기본 양식을 JSON으로 주세요."
         }
-        from openai import ChatCompletion
-        resp = ChatCompletion.create(
+
+        # GPT v1 인터페이스로 호출
+        resp = openai.chat.completions.create(
             model="gpt-4o-mini",
             messages=[system_prompt, user_prompt],
             max_tokens=500,
             temperature=0.5,
-)
+        )
+        data = resp.choices[0].message.content
+        out_df = pd.DataFrame(json.loads(data))
 
-        data = json.loads(resp.choices[0].message.content)
-        out_df = pd.DataFrame(data)
-
+    # 결과를 엑셀로 변환하여 응답
     buffer = BytesIO()
     out_df.to_excel(buffer, index=False)
     buffer.seek(0)
     logger.info(f"Response ready for template={raw}")
-    filename = f"{tpl if 'tpl' in locals() else raw}.xlsx"
+
+    filename    = f"{raw}.xlsx"
     disposition = "attachment; filename*=UTF-8''" + quote(filename)
-    headers = {
-        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    headers     = {
+        "Content-Type":        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "Content-Disposition": disposition,
-        "Cache-Control": "public, max-age=3600"
+        "Cache-Control":       "public, max-age=3600"
     }
     return Response(buffer.read(), headers=headers)
 
