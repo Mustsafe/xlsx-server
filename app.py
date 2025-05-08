@@ -190,7 +190,7 @@ def create_xlsx():
         try:
             resp = openai.chat.completions.create(
                 model="gpt-4o-mini",
-                messages=[system_message, user_message],
+                messages=[system_prompt, user_prompt],
                 max_tokens=800,
                 temperature=0.7,
             )
