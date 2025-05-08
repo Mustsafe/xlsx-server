@@ -101,29 +101,37 @@ def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict)
     norm = raw.replace("_", " ").replace("-", " ")
     key_lower = norm.lower()
     cleaned_key = key_lower.replace(" ", "")
+
+    # JSA/LOTO 예외
     if "__FORCE_JSA__" in alias_map and ("jsa" in cleaned_key or "작업안전분석" in cleaned_key):
         return alias_map["__FORCE_JSA__"]
     if "__FORCE_LOTO__" in alias_map and "loto" in cleaned_key:
         return alias_map["__FORCE_LOTO__"]
+
+    # 1) 정확 일치
     for tpl in template_list:
-        tpl_norm = tpl.lower().replace(" ", "").replace("_", "")
-        if key_lower == tpl.lower() or cleaned_key == tpl_norm:
+        if key_lower == tpl.lower() or cleaned_key == tpl.replace(" ", "").replace("_", "").lower():
             return tpl
+
+    # 2) 토큰 매치 (모든 토큰이 포함될 때만)
     tokens = [t for t in key_lower.split(" ") if t]
     candidates = [tpl for tpl in template_list if all(tok in tpl.lower() for tok in tokens)]
     if len(candidates) == 1:
         return candidates[0]
-    substr_cands = [tpl for tpl in template_list if cleaned_key in tpl.lower().replace(" ", "").replace("_", "")]
-    if len(substr_cands) == 1:
-        return substr_cands[0]
+
+    # 3) alias 맵
     if raw in alias_map:
         return alias_map[raw]
     if key_lower in alias_map:
         return alias_map[key_lower]
+
+    # 4) fuzzy 매치 (cutoff 높임)
     candidates_norm = [t.replace(" ", "").replace("_", "").lower() for t in template_list]
-    matches = difflib.get_close_matches(cleaned_key, candidates_norm, n=1, cutoff=0.6)
+    matches = difflib.get_close_matches(cleaned_key, candidates_norm, n=1, cutoff=0.8)
     if matches:
         return template_list[candidates_norm.index(matches[0])]
+
+    # 실패 시
     raise ValueError(f"템플릿 '{raw_keyword}'을(를) 찾을 수 없습니다.")
 
 @app.route("/", methods=["GET"])
@@ -209,12 +217,28 @@ def create_xlsx():
                 "실무 예시 2": ""
             }])
 
-    # 결과를 엑셀로 변환하여 응답
-    buffer = BytesIO()
-    out_df.to_excel(buffer, index=False)
-    buffer.seek(0)
-    logger.info(f"Response ready for template={raw}")
+        # 결과를 고도화된 표 형식으로 엑셀 변환하여 응답 (openpyxl 사용)
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
 
+    wb = Workbook()
+    ws = wb.active
+
+    # 1) 헤더
+    ws.append(list(out_df.columns))
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+
+    # 2) 데이터 행
+    for row in out_df.itertuples(index=False):
+        ws.append(row)
+
+    # 3) 스트림으로 내보내기
+    buffer = BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+
+    logger.info(f"Response ready for template={raw}")
     filename    = f"{tpl if 'tpl' in locals() else raw}.xlsx"
     disposition = "attachment; filename*=UTF-8''" + quote(filename)
     headers     = {
