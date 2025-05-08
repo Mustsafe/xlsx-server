@@ -135,6 +135,7 @@ def create_xlsx():
     raw = request.args.get("template", "")
     logger.info(f"create_xlsx called with template={raw}")
 
+    # CSV 로드 및 기본 검증
     csv_path = os.path.join(DATA_DIR, "통합_노지파일.csv")
     if not os.path.exists(csv_path):
         logger.error("통합 CSV 파일이 없습니다.")
@@ -177,7 +178,7 @@ def create_xlsx():
             "content": f"템플릿명 '{raw}'에 대한 기본 양식을 JSON으로 제공해 주세요."
         }
 
-        # 1) GPT 호출 (v1 인터페이스)
+        # GPT 호출 (v1 인터페이스)
         try:
             resp = openai.chat.completions.create(
                 model="gpt-4o-mini",
@@ -187,13 +188,12 @@ def create_xlsx():
             )
             text = resp.choices[0].message.content
 
-            # 2) JSON 파싱 시도
+            # JSON 파싱 시도
             try:
                 data = json.loads(text)
                 out_df = pd.DataFrame(data)
             except Exception as parse_err:
                 logger.error(f"Fallback JSON parsing failed: {parse_err}\nContent: {text}")
-                # 비정형 텍스트라도 제공
                 out_df = pd.DataFrame([{
                     "작업 항목": raw,
                     "작성 양식": text,
@@ -202,7 +202,6 @@ def create_xlsx():
                 }])
         except Exception as llm_err:
             logger.error(f"GPT call failed: {llm_err}")
-            # LLM 호출 자체 실패 시에도 최소 스켈레톤 반환
             out_df = pd.DataFrame([{
                 "작업 항목": raw,
                 "작성 양식": "",
@@ -224,7 +223,6 @@ def create_xlsx():
         "Cache-Control":       "public, max-age=3600"
     }
     return Response(buffer.read(), headers=headers)
-
 
 @app.route("/list_templates", methods=["GET"])
 def list_templates():
