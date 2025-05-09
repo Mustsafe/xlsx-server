@@ -37,29 +37,23 @@ os.makedirs(DATA_DIR, exist_ok=True)
 def sanitize(text: str) -> str:
     return re.sub(r"[^0-9a-z가-힣]", "", text.lower())
 
-# ── alias_map 생성: 모든 변형 키 + 개별 단어 키 등록 ───────────────────────────
+# ── alias_map 생성 ─────────────────────────────────────────────────────────────
 def build_alias_map(template_list: List[str]) -> dict:
     alias = {}
     SUFFIXES = ["점검표","계획서","서식","표","양식"]
     for tpl in template_list:
         low = tpl.lower()
-        # 1) 원본 소문자
         alias[low] = tpl
-        # 2) 공백<->언더바
         alias[low.replace(" ", "_")] = tpl
         alias[low.replace("_", " ")] = tpl
-        # 3) 특수문자 제거
         key3 = sanitize(low)
         alias[key3] = tpl
-        # 4) 접미사 변형
         base = re.sub(r"(서식|양식|점검표|계획서|표)$", "", low).strip()
         for suf in SUFFIXES:
             k = base + suf
             alias[k] = tpl
             alias[k.replace(" ", "_")] = tpl
             alias[sanitize(k)] = tpl
-
-    # 5) FORCE JSA/LOTO
     for tpl in template_list:
         s = sanitize(tpl)
         if "jsa" in s or "작업안전분석" in s:
@@ -67,22 +61,17 @@ def build_alias_map(template_list: List[str]) -> dict:
             alias["작업안전분석"] = tpl
         if "loto" in s:
             alias["loto"] = tpl
-
-    # 6) 개별 단어 키 등록 (범용 키워드 매핑 강화)
     for tpl in template_list:
         low = tpl.lower().replace("_", " ")
-        # 단어 분리: 한글/영어/숫자 연속문자
         words = re.findall(r"[0-9a-z가-힣]+", low)
         for w in words:
             sw = sanitize(w)
             if sw:
                 alias[sw] = tpl
-
     return alias
 
-# ── 키워드 → 템플릿 resolve (최다 사용 빈도 우선) ─────────────────────────────
+# ── 키워드 → 템플릿 resolve ─────────────────────────────────────────────────────
 def resolve_keyword(raw: str, templates: List[str], alias_map: dict, freq: dict) -> str:
-    # 1) 접미사형 동사 제거 후 소문자
     r = re.sub(
         r"\s*(?:양식|서식|점검표|계획서|표)(?:을|를)?\s*"
         r"(?:주세요|줘|달라|해주세요|전달)?$",
@@ -91,45 +80,29 @@ def resolve_keyword(raw: str, templates: List[str], alias_map: dict, freq: dict)
         flags=re.IGNORECASE
     ).lower()
     cleaned = sanitize(r)
-
-    # helper: 사용 빈도 최대 템플릿 선택
     def pick_max(cands):
         return max(cands, key=lambda t: freq.get(t, 0))
-
-    # 2) alias_map 직접 조회
     if cleaned in alias_map:
         return alias_map[cleaned]
-
-    # 3) FORCE JSA/LOTO
     if "jsa" in cleaned and "jsa" in alias_map:
         return alias_map["jsa"]
     if "loto" in cleaned and "loto" in alias_map:
         return alias_map["loto"]
-
-    # 4) 토큰 매칭
     tokens = [t for t in r.split() if t]
     tok_cands = [tpl for tpl in templates if all(tok in tpl.lower() for tok in tokens)]
     if tok_cands:
         return pick_max(tok_cands)
-
-    # 5) 접두사 매칭
     prefix_cands = [tpl for tpl in templates if sanitize(tpl).startswith(cleaned)]
     if prefix_cands:
         return pick_max(prefix_cands)
-
-    # 6) 부분문자열 매칭
     substr_cands = [tpl for tpl in templates if cleaned in sanitize(tpl)]
     if substr_cands:
         return pick_max(substr_cands)
-
-    # 7) 퍼지 매칭
     norms = [sanitize(t) for t in templates]
     matches = difflib.get_close_matches(cleaned, norms, n=3, cutoff=0.6)
     if matches:
         cands = [templates[norms.index(m)] for m in matches]
         return pick_max(cands)
-
-    # 8) 매칭 실패
     raise ValueError(f"템플릿 '{raw}'을(를) 찾을 수 없습니다.")
 
 # ── 템플릿 리스트 조회 ─────────────────────────────────────────────────────────
@@ -153,77 +126,71 @@ def create_xlsx():
     path = os.path.join(DATA_DIR, "통합_노지파일.csv")
     if not os.path.exists(path):
         return jsonify(error="통합 CSV 파일이 없습니다."), 404
-
     df = pd.read_csv(path, encoding="utf-8-sig")
-    if "템플릿명" not in df.columns:
-        return jsonify(error="필요한 '템플릿명' 컬럼이 없습니다."), 500
-
     templates = sorted(df["템플릿명"].dropna().unique().tolist())
     alias_map = build_alias_map(templates)
     freq = df["템플릿명"].value_counts().to_dict()
-
     try:
         tpl = resolve_keyword(raw, templates, alias_map, freq)
-        logger.info(f"Matched template: {tpl}")
-        out_df = df[df["템플릿명"] == tpl][
-            ["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]
-        ]
-    except ValueError as e:
-        logger.warning(str(e))
-        # fallback: GPT에게 JSON 요청
-        system = {
-            "role": "system",
-            "content": (
-                "당신은 산업안전 문서 템플릿 전문가입니다.\n"
-                "다음 컬럼(작업 항목, 작성 양식, 실무 예시 1, 실무 예시 2)을 가진 JSON 배열을 5개 이상 생성해주세요.\n"
-                f"템플릿명: {raw}"
-            )
-        }
-        user = {"role": "user", "content": f"템플릿명 '{raw}'의 기본 양식을 JSON 배열로 주세요."}
-        resp = openai.chat.completions.create(
-            model="gpt-4o-mini", messages=[system, user],
-            max_tokens=800, temperature=0.7
-        )
+        out_df = df[df["템플릿명"] == tpl][["작업 항목","작성 양식","실무 예시 1","실무 예시 2"]].copy()
+    except ValueError:
+        system = {"role":"system","content":"당신은 산업안전 문서 템플릿 전문가입니다. 기본 JSON 배열 5개 이상 생성."}
+        user = {"role":"user","content":f"템플릿명 '{raw}'의 양식을 JSON 배열로 주세요."}
+        resp = openai.ChatCompletion.create(model="gpt-4o-mini", messages=[system, user], max_tokens=800)
         try:
-            data = json.loads(resp.choices[0].message.content)
-            out_df = pd.DataFrame(data)
+            out_df = pd.DataFrame(json.loads(resp.choices[0].message.content))
         except:
-            out_df = pd.DataFrame([{
-                "작업 항목": raw,
-                "작성 양식": resp.choices[0].message.content.replace("\n", " "),
-                "실무 예시 1": "",
-                "실무 예시 2": ""
-            }])
-
-    # Excel 생성 & 포맷
+            out_df = pd.DataFrame([{"작업 항목": raw, "작성 양식": resp.choices[0].message.content.replace("\n", " "), "실무 예시 1": "", "실무 예시 2": ""}])
+    # ── AI 동적 고도화 ─────────────────────────────────────────────────────────
+    for idx, row in out_df.iterrows():
+        base = row["작성 양식"]
+        if isinstance(base, str) and len(base.splitlines()) < 3:
+            sys_msg = {"role":"system","content":"체크리스트 항목 참고해 5~8개 상세 점검 리스트 JSON 배열로 생성"}
+            usr_msg = {"role":"user","content":json.dumps({"base": base})}
+            try:
+                r = openai.ChatCompletion.create(model="gpt-4o-mini", messages=[sys_msg, usr_msg], max_tokens=300)
+                enc = json.loads(r.choices[0].message.content)
+                if isinstance(enc, list):
+                    out_df.at[idx, "작성 양식"] = "\n".join(enc)
+            except:
+                pass
+        for ex in ["실무 예시 1", "실무 예시 2"]:
+            ex_base = row.get(ex, "")
+            if isinstance(ex_base, str) and ex_base:
+                sysg = {"role":"system","content":"구체적 현장 사례 1개 설명"}
+                usrg = {"role":"user","content":json.dumps({"base": ex_base})}
+                try:
+                    rr = openai.ChatCompletion.create(model="gpt-4o-mini", messages=[sysg, usrg], max_tokens=100)
+                    enx = rr.choices[0].message.content.strip()
+                    out_df.at[idx, ex] = enx
+                except:
+                    pass
+    order = ["📋 작업 절차","💡 실무 가이드","✅ 체크리스트","🛠️ 유지보수 포인트","📎 출처"]
+    out_df["_order"] = out_df["작업 항목"].apply(lambda x: order.index(x) if x in order else 99)
+    out_df = out_df.sort_values("_order").drop(columns="_order")
     wb = Workbook()
     ws = wb.active
-    headers = ["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]
+    headers = ["작업 항목","작성 양식","실무 예시 1","실무 예시 2"]
     ws.append(headers)
     for cell in ws[1]:
         cell.font = Font(bold=True)
-        cell.alignment = Alignment(horizontal="center")
+        cell.alignment = Alignment(horizontal="center", vertical="center")
     for row in out_df.itertuples(index=False):
         ws.append(row)
     for i, col in enumerate(ws.columns, 1):
-        mx = max(len(str(c.value)) for c in col)
+        mx = max(len(str(c.value or "")) for c in col)
         ws.column_dimensions[get_column_letter(i)].width = min(mx + 2, 60)
-        if headers[i-1] == "작성 양식":
-            for c in col[1:]:
-                c.alignment = Alignment(wrap_text=True)
-
+        for c in col[1:]:
+            c.alignment = Alignment(wrap_text=True, vertical="top", horizontal="left")
     buf = BytesIO()
     wb.save(buf)
     buf.seek(0)
-    disp = quote(f"{tpl}.xlsx" if 'tpl' in locals() else f"{raw}.xlsx")
-    return Response(
-        buf.read(),
-        headers={
-            "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "Content-Disposition": f"attachment; filename*=UTF-8''{disp}",
-            "Cache-Control": "public, max-age=3600"
-        }
-    )
+    disp = quote(f"{tpl}.xlsx")
+    return Response(buf.read(), headers={
+        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Disposition": f"attachment; filename*=UTF-8''{disp}",
+        "Cache-Control": "public, max-age=3600"
+    })
 
 # ── 뉴스 크롤링 & 렌더링 로직 ──────────────────────────────────────────────────
 def fetch_safetynews_article_content(url):
@@ -309,22 +276,15 @@ def render_news():
     items = sorted(filtered, key=lambda x: parser.parse(x["날짜"]), reverse=True)[:3]
     if not items:
         return jsonify(error="가져올 뉴스가 없습니다."), 200
-
     template = (
         "📌 산업 안전 및 보건 최신 뉴스\n"
         "📰 “{title}” ({date}, {출처})\n\n"
         "{본문}\n"
         "🔎 더 보려면 “뉴스 더 보여줘”를 입력하세요."
     )
-    system_msg = {
-        "role": "system",
-        "content": f"다음 JSON 형식의 뉴스 목록을 아래 템플릿에 맞춰 출력하세요.\n템플릿:\n{template}"
-    }
-    user_msg = {"role": "user", "content": str(items)}
-    resp = openai.chat.completions.create(
-        model="gpt-4o-mini", messages=[system_msg, user_msg],
-        max_tokens=800, temperature=0.7
-    )
+    system_msg = {"role":"system","content":f"다음 JSON 형식의 뉴스 목록을 아래 템플릿에 맞춰 출력하세요.\n템플릿:\n{template}"}
+    user_msg = {"role":"user","content":str(items)}
+    resp = openai.chat.completions.create(model="gpt-4o-mini", messages=[system_msg, user_msg], max_tokens=800, temperature=0.7)
     return jsonify(formatted_news=resp.choices[0].message.content)
 
 if __name__ == "__main__":
