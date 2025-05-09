@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify, send_from_directory, Response
 import pandas as pd
 import os
+import re
 import requests
 from bs4 import BeautifulSoup
 import openai
@@ -31,6 +32,10 @@ NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
 DATA_DIR = "./data"
 os.makedirs(DATA_DIR, exist_ok=True)
 
+# ── 엑셀 생성용 import ─────────────────────────────────────────────────────────
+from openpyxl import Workbook
+from openpyxl.styles import Font
+
 # ── alias_map / resolve_keyword (app (1).py 버전 그대로) ────────────────────
 def build_alias_map(template_list: List[str]) -> dict:
     alias = {}
@@ -39,28 +44,23 @@ def build_alias_map(template_list: List[str]) -> dict:
         alias[tpl] = tpl
         alias[tpl.replace("_", " ")] = tpl
         alias[tpl.replace(" ", "_")] = tpl
-
         low = tpl.lower()
         alias[low] = tpl
         alias[low.replace("_", " ")] = tpl
-
         base_space = tpl.replace("_", " ")
         nospace = base_space.replace(" ", "").lower()
         alias[nospace] = tpl
-
         for suf in SUFFIXES:
             combo = base_space + suf
             alias[combo] = tpl
             alias[combo.replace(" ", "_")] = tpl
             alias[combo.lower()] = tpl
-
     for tpl in template_list:
         norm = tpl.lower().replace(" ", "").replace("_", "")
         if "jsa" in norm or "작업안전분석" in norm:
             alias["__FORCE_JSA__"] = tpl
         if "loto" in norm:
             alias["__FORCE_LOTO__"] = tpl
-
     temp = {}
     for k, v in alias.items():
         temp[k.replace(" ", "_")] = v
@@ -107,14 +107,16 @@ def resolve_keyword(raw_keyword: str, template_list: List[str], alias_map: dict)
         return alias_map[key_lower]
 
     # 퍼지 매칭
-    candidates_norm = [t.replace(" ", "").replace("_", "").lower() for t in template_list]
+    candidates_norm = [
+        t.replace(" ", "").replace("_", "").lower()
+        for t in template_list
+    ]
     matches = difflib.get_close_matches(cleaned_key, candidates_norm, n=1, cutoff=0.6)
     if matches:
         return template_list[candidates_norm.index(matches[0])]
 
     raise ValueError(f"템플릿 '{raw_keyword}'을(를) 찾을 수 없습니다. 정확한 이름을 입력해주세요.")
 # ────────────────────────────────────────────────────────────────────────────────
-
 
 @app.route("/", methods=["GET"])
 def index():
@@ -131,12 +133,12 @@ def list_templates():
         return jsonify(error="통합 CSV 파일이 없습니다."), 404
     df = pd.read_csv(csv_path, encoding='utf-8-sig')
     templates = sorted(df["템플릿명"].dropna().unique().tolist())
+    alias_map = build_alias_map(templates)
     return jsonify({
         "template_list": templates,
-        "alias_keys": sorted(build_alias_map(templates).keys())
+        "alias_keys": sorted(alias_map.keys())
     })
 
-# ── 수정된 create_xlsx: backup 의 매핑 그대로, 500 에러 없도록 완전 반환 ─────────────
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
     raw = request.args.get("template", "").strip()
@@ -154,14 +156,12 @@ def create_xlsx():
     alias_map = build_alias_map(templates)
 
     try:
-        # 1) 고도화된 70종 양식 매칭
         tpl = resolve_keyword(raw, templates, alias_map)
         logger.info(f"Matched template: {tpl}")
         out_df = df[df["템플릿명"] == tpl][
             ["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]
         ]
     except ValueError as e:
-        # 2) 매칭 실패 시 기본 임시 양식 생성
         logger.warning(str(e))
         out_df = pd.DataFrame([{
             "작업 항목": raw,
@@ -170,7 +170,6 @@ def create_xlsx():
             "실무 예시 2": ""
         }])
 
-    # 3) 엑셀 생성
     wb = Workbook()
     ws = wb.active
     headers = ["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]
@@ -186,13 +185,12 @@ def create_xlsx():
 
     filename = f"{tpl}.xlsx" if 'tpl' in locals() else f"{raw}.xlsx"
     disposition = "attachment; filename*=UTF-8''" + quote(filename)
-    resp_headers = {
+    headers = {
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "Content-Disposition": disposition,
         "Cache-Control": "public, max-age=3600"
     }
-    return Response(buf.read(), headers=resp_headers)
-# ────────────────────────────────────────────────────────────────────────────────
+    return Response(buf.read(), headers=headers)
 
 # ── 뉴스 크롤링 / 렌더링 로직 (원본 그대로) ─────────────────────────────────
 def fetch_safetynews_article_content(url):
