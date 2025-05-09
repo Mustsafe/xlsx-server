@@ -37,28 +37,23 @@ os.makedirs(DATA_DIR, exist_ok=True)
 def sanitize(text: str) -> str:
     return re.sub(r"[^0-9a-z가-힣]", "", text.lower())
 
-# ── alias_map 생성 ──────────────────────────────────────────────────────────────
+# ── alias_map 생성: 모든 변형 키 등록 ───────────────────────────────────────────
 def build_alias_map(template_list: List[str]) -> dict:
     alias = {}
     SUFFIXES = ["점검표","계획서","서식","표","양식"]
     for tpl in template_list:
         low = tpl.lower()
-        # 1) 원본 소문자
         alias[low] = tpl
-        # 2) 공백<->언더바
         alias[low.replace(" ", "_")] = tpl
         alias[low.replace("_", " ")] = tpl
-        # 3) 특수문자 제거
         key3 = sanitize(low)
         alias[key3] = tpl
-        # 4) 접미사 변형
         base = re.sub(r"(서식|양식|점검표|계획서|표)$", "", low).strip()
         for suf in SUFFIXES:
             k = base + suf
             alias[k] = tpl
             alias[k.replace(" ", "_")] = tpl
             alias[sanitize(k)] = tpl
-    # 5) FORCE JSA/LOTO
     for tpl in template_list:
         s = sanitize(tpl)
         if "jsa" in s or "작업안전분석" in s:
@@ -70,7 +65,6 @@ def build_alias_map(template_list: List[str]) -> dict:
 
 # ── 키워드 → 템플릿 resolve (최다 사용 빈도 우선) ─────────────────────────────
 def resolve_keyword(raw: str, templates: List[str], alias_map: dict, freq: dict) -> str:
-    # 1) 접미사형 동사 제거
     r = re.sub(
         r"\s*(?:양식|서식|점검표|계획서|표)(?:을|를)?\s*(?:주세요|줘|달라|해주세요|전달)?$",
         "",
@@ -79,47 +73,46 @@ def resolve_keyword(raw: str, templates: List[str], alias_map: dict, freq: dict)
     ).lower()
     cleaned = sanitize(r)
 
-    # helper to pick highest frequency
     def pick_max(cands):
         return max(cands, key=lambda t: freq.get(t, 0))
 
-    # 2) alias_map 직접 조회
+    # 1) alias_map 직접 조회
     if cleaned in alias_map:
         return alias_map[cleaned]
 
-    # 3) FORCE JSA/LOTO
+    # 2) FORCE JSA/LOTO
     if "jsa" in cleaned and "jsa" in alias_map:
         return alias_map["jsa"]
     if "loto" in cleaned and "loto" in alias_map:
         return alias_map["loto"]
 
-    # 4) 토큰 매칭
+    # 3) 토큰 매칭
     tokens = [t for t in r.split() if t]
     tok_cands = [tpl for tpl in templates if all(tok in tpl.lower() for tok in tokens)]
     if tok_cands:
         return pick_max(tok_cands)
 
-    # 5) 접두사 매칭
+    # 4) 접두사 매칭
     prefix_cands = [tpl for tpl in templates if sanitize(tpl).startswith(cleaned)]
     if prefix_cands:
         return pick_max(prefix_cands)
 
-    # 6) 부분문자열 매칭
+    # 5) 부분문자열 매칭
     substr_cands = [tpl for tpl in templates if cleaned in sanitize(tpl)]
     if substr_cands:
         return pick_max(substr_cands)
 
-    # 7) 퍼지 매칭
+    # 6) 퍼지 매칭
     norms = [sanitize(t) for t in templates]
     matches = difflib.get_close_matches(cleaned, norms, n=3, cutoff=0.6)
     if matches:
         cands = [templates[norms.index(m)] for m in matches]
         return pick_max(cands)
 
-    # 8) 매칭 실패
+    # 7) 매칭 실패
     raise ValueError(f"템플릿 '{raw}'을(를) 찾을 수 없습니다.")
 
-# ── 템플릿 리스트 조회 ───────────────────────────────────────────────────────
+# ── 템플릿 목록 조회 ─────────────────────────────────────────────────────────
 @app.route("/list_templates", methods=["GET"])
 def list_templates():
     path = os.path.join(DATA_DIR, "통합_노지파일.csv")
@@ -133,7 +126,7 @@ def list_templates():
         "alias_keys": sorted(alias_map.keys())
     })
 
-# ── 엑셀 생성 ─────────────────────────────────────────────────────────────────
+# ── 엑셀 생성 엔드포인트 ───────────────────────────────────────────────────────
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
     raw = request.args.get("template", "")
@@ -157,7 +150,7 @@ def create_xlsx():
         ]
     except ValueError as e:
         logger.warning(str(e))
-        # fallback: GPT에게 JSON 요청
+        # GPT fallback
         system = {
             "role": "system",
             "content": (
@@ -182,7 +175,7 @@ def create_xlsx():
                 "실무 예시 2": ""
             }])
 
-    # 엑셀 생성 & 포맷
+    # Excel 생성 & 포맷
     wb = Workbook()
     ws = wb.active
     headers = ["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]
