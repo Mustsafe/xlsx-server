@@ -154,7 +154,7 @@ def create_xlsx():
             for cell in col[1:]:
                 cell.alignment = Alignment(wrap_text=True, vertical="top", horizontal="left")
         buf = BytesIO(); wb.save(buf); buf.seek(0)
-        disp = quote(f"{tpl}.xlsx")
+        disp = quote(f"{tpl}.xlsx") if 'tpl' in locals() else quote(f"{raw}.xlsx")
         return Response(buf.read(), headers={
             "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             "Content-Disposition":f"attachment; filename*=UTF-8''{disp}",
