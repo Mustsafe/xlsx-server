@@ -55,15 +55,17 @@ def resolve_keyword(raw: str, templates: List[str], alias_map: dict, freq: dict)
         return templates[norms.index(match[0])]
     raise ValueError(f"템플릿 '{raw}'을(를) 찾을 수 없습니다.")
 
-# JSON 배열 행 분해
+# JSON 배열 행 분해 (BOM·스마트 따옴표 처리 포함)
 
 def explode_json_rows(df: pd.DataFrame) -> pd.DataFrame:
     records = []
     for _, row in df.iterrows():
-        text = row["작성 양식"]
+        raw_text = row.get("작성 양식", "")
+        text = raw_text.lstrip("\ufeff").strip()
+        text = text.replace("“", '"').replace("”", '"')
         try:
-            arr = json.loads(text) if isinstance(text, str) and text.strip().startswith("[") else None
-        except:
+            arr = json.loads(text) if text.startswith("[") else None
+        except json.JSONDecodeError:
             arr = None
         if isinstance(arr, list):
             for elem in arr:
@@ -85,8 +87,7 @@ def create_xlsx():
 
         df = pd.read_csv(path, encoding="utf-8-sig")
         templates = df["템플릿명"].dropna().unique().tolist()
-        alias_map = build_alias_map(templates)
-        freq = df["템플릿명"].value_counts().to_dict()
+        alias_map = build_alias_map(templates)\n        freq = df["템플릿명"].value_counts().to_dict()
 
         try:
             tpl = resolve_keyword(raw, templates, alias_map, freq)
@@ -209,53 +210,3 @@ def crawl_naver_news():
             for item in r.json().get("items",[]):
                 title = BeautifulSoup(item["title"],"html.parser").get_text()
                 desc  = BeautifulSoup(item["description"],"html.parser").get_text()
-                out.append({"출처":item.get("originallink","네이버"),"제목":title,"링크":item.get("link",""),"날짜":item.get("pubDate",""),"본문":desc})
-    return out
-
-def crawl_safetynews():
-    base = "https://www.safetynews.co.kr"
-    kws = ["건설 사고","추락 사고","끼임 사고","질식 사고","폭발 사고","산업재해","산업안전"]
-    out=[]
-    for kw in kws:
-        r = requests.get(f"{base}/search/news?searchword={kw}",headers={"User-Agent":"Mozilla/5.0"},timeout=10)
-        if r.status_code==200:
-            soup = BeautifulSoup(r.text,"html.parser")
-            for item in soup.select(".article-list-content")[:2]:
-                t = item.select_one(".list-titles")
-                href = base+t["href"] if t and t.get("href") else ""
-                d    = item.select_one(".list-dated")
-                content = fetch_safetynews_article_content(href) if href else ""
-                out.append({"출처":"안전신문","제목":t.get_text(strip=True) if t else "","링크":href,"날짜":d.get_text(strip=True) if d else "","본문":content[:1000]})
-    return out
-
-@app.route("/daily_news", methods=["GET"])
-def get_daily_news():
-    news = crawl_naver_news() + crawl_safetynews()
-    if not news:
-        return jsonify(error="가져올 뉴스가 없습니다."),200
-    return jsonify(news)
-
-@app.route("/render_news", methods=["GET"])
-def render_news():
-    news = crawl_naver_news() + crawl_safetynews()
-    cutoff = datetime.utcnow() - timedelta(days=3)
-    filtered=[]
-    for n in news:
-        try:
-            dt=parser.parse(n["날짜"])
-        except:
-            continue
-        if dt>=cutoff:
-            n["날짜"]=dt.strftime("%Y.%m.%d")
-            filtered.append(n)
-    items=sorted(filtered, key=lambda x:parser.parse(x["날짜"]), reverse=True)[:3]
-    if not items:
-        return jsonify(error="가져올 뉴스가 없습니다."),200
-    template = ("📌 산업 안전 및 보건 최신 뉴스\n" "📰 “{title}” ({date}, {출처})\n\n" "{본문}\n" "🔎 더 보려면 “뉴스 더 보여줘”를 입력하세요.")
-    system_msg={"role":"system","content":f"다음 JSON 형식의 뉴스 목록을 아래 템플릿에 맞춰 출력하세요.\n템플릿:\n{template}"}
-    user_msg={"role":"user","content":str(items)}
-    resp=openai.chat.completions.create(model="gpt-4o-mini", messages=[system_msg,user_msg], max_tokens=800, temperature=0.7)
-    return jsonify(formatted_news=resp.choices[0].message.content)
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
