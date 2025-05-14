@@ -18,44 +18,6 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment
 from openpyxl.utils import get_column_letter
 
-import csv
-from datetime import datetime as _dt
-
-# ── 앱 설정 ───────────────────────────────────────────────────────────────────
-app = Flask(__name__)
-app.config['JSON_AS_ASCII'] = False
-
-openai.api_key      = os.getenv("OPENAI_API_KEY")
-NAVER_CLIENT_ID     = os.getenv("NAVER_CLIENT_ID")
-NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
-
-DATA_DIR = "./data"
-os.makedirs(DATA_DIR, exist_ok=True)
-
-# ── 분석 로그 저장 설정 ─────────────────────────────────────────────────────────
-LOG_CSV = os.path.join(DATA_DIR, "analytics_log.csv")
-
-def append_log(user_id: str, template: str, fallback: bool, error_flag: bool):
-    """
-    analytics_log.csv 에 한 줄씩 기록.
-    컬럼: timestamp, user_id, template, fallback(0/1), error(0/1)
-    """
-    # 헤더가 없으면 생성
-    if not os.path.exists(LOG_CSV):
-        with open(LOG_CSV, "w", newline="", encoding="utf-8-sig") as f:
-            writer = csv.writer(f)
-            writer.writerow(["timestamp", "user_id", "template", "fallback", "error"])
-    # 로그 한 줄 append
-    with open(LOG_CSV, "a", newline="", encoding="utf-8-sig") as f:
-        writer = csv.writer(f)
-        writer.writerow([
-            _dt.utcnow().isoformat(),
-            user_id,
-            template,
-            "1" if fallback else "0",
-            "1" if error_flag else "0"
-        ])
-
 # ── 로거 설정 ─────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -187,15 +149,7 @@ def list_templates():
 # ── 엑셀 생성 엔드포인트 ───────────────────────────────────────────────────────
 @app.route("/create_xlsx", methods=["GET"])
 def create_xlsx():
-    # 1) 사용자 식별 & 요청 파라미터
-    user_id     = getattr(g, "user_id", "anonymous")
-    raw         = request.args.get("template", "")
-
-    # 2) 로깅 상태 초기화
-    is_fallback = False
-    error_flag  = False
-
-    # 3) 데이터 소스 확인
+    raw = request.args.get("template", "")
     path = os.path.join(DATA_DIR, "통합_노지파일.csv")
     if not os.path.exists(path):
         return jsonify(error="통합 CSV 파일이 없습니다."), 404
@@ -206,9 +160,8 @@ def create_xlsx():
 
     templates = sorted(df["템플릿명"].dropna().unique().tolist())
     alias_map = build_alias_map(templates)
-    freq      = df["템플릿명"].value_counts().to_dict()
+    freq = df["템플릿명"].value_counts().to_dict()
 
-    # 4) 템플릿 매칭 및 out_df 생성
     try:
         tpl = resolve_keyword(raw, templates, alias_map, freq)
         logger.info(f"Matched template: {tpl}")
@@ -217,7 +170,7 @@ def create_xlsx():
         ]
     except ValueError as e:
         logger.warning(str(e))
-        is_fallback = True
+        # fallback: GPT에게 JSON 요청
         system = {
             "role": "system",
             "content": (
@@ -226,56 +179,43 @@ def create_xlsx():
                 f"템플릿명: {raw}"
             )
         }
-        user = {
-            "role": "user",
-            "content": f"템플릿명 '{raw}'의 기본 양식을 JSON 배열로 주세요."
-        }
-        resp = openai.ChatCompletion.create(
+        user = {"role": "user", "content": f"템플릿명 '{raw}'의 기본 양식을 JSON 배열로 주세요."}
+        resp = openai.chat.completions.create(
             model="gpt-4o-mini", messages=[system, user],
             max_tokens=800, temperature=0.7
         )
         try:
-            data   = json.loads(resp.choices[0].message.content)
+            data = json.loads(resp.choices[0].message.content)
             out_df = pd.DataFrame(data)
-        except Exception:
-            error_flag = True
-            out_df     = pd.DataFrame([{
+        except:
+            out_df = pd.DataFrame([{
                 "작업 항목": raw,
                 "작성 양식": resp.choices[0].message.content.replace("\n", " "),
                 "실무 예시 1": "",
                 "실무 예시 2": ""
             }])
 
-    # 5) 실행 로그 기록 (안정성 확보)
-    try:
-        append_log(user_id, tpl if 'tpl' in locals() else raw, is_fallback, error_flag)
-    except Exception as e:
-        logger.warning(f"Analytics log write failed: {e}")
-
-    # 6) Excel 생성 & 포맷
+    # Excel 생성 & 포맷
     wb = Workbook()
     ws = wb.active
     headers = ["작업 항목", "작성 양식", "실무 예시 1", "실무 예시 2"]
     ws.append(headers)
     for cell in ws[1]:
-        cell.font      = Font(bold=True)
-        cell.alignment = Alignment(horizontal="center", vertical="center")
-
+        cell.font = Font(bold=True)
+        cell.alignment = Alignment(horizontal="center")
     for row in out_df.itertuples(index=False):
         ws.append(row)
-
     for i, col in enumerate(ws.columns, 1):
-        mx = max(len(str(c.value or "")) for c in col)
+        mx = max(len(str(c.value)) for c in col)
         ws.column_dimensions[get_column_letter(i)].width = min(mx + 2, 60)
         if headers[i-1] == "작성 양식":
             for c in col[1:]:
-                c.alignment = Alignment(wrap_text=True, vertical="top", horizontal="left")
+                c.alignment = Alignment(wrap_text=True)
 
     buf = BytesIO()
     wb.save(buf)
     buf.seek(0)
     disp = quote(f"{tpl}.xlsx" if 'tpl' in locals() else f"{raw}.xlsx")
-
     return Response(
         buf.read(),
         headers={
@@ -284,7 +224,6 @@ def create_xlsx():
             "Cache-Control": "public, max-age=3600"
         }
     )
-
 
 # ── 뉴스 크롤링 & 렌더링 로직 ──────────────────────────────────────────────────
 def fetch_safetynews_article_content(url):
@@ -388,75 +327,5 @@ def render_news():
     )
     return jsonify(formatted_news=resp.choices[0].message.content)
 
-@app.route("/stats", methods=["GET"])
-def get_stats():
-    """
-    ?period=daily 또는 weekly
-    daily  → 오늘 00:00:00 ~ 현재 시각 (UTC 기준)
-    weekly → 이번 주 월요일 00:00:00 ~ 현재 시각
-    """
-    period = request.args.get("period", "daily")
-    now = datetime.utcnow()
-
-    if period == "weekly":
-        start = now - timedelta(days=now.weekday())
-        start = start.replace(hour=0, minute=0, second=0, microsecond=0)
-    else:
-        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-
-    log_path = os.path.join(DATA_DIR, "analytics_log.csv")
-    if not os.path.exists(log_path):
-        return jsonify(error="로그 파일을 찾을 수 없습니다."), 404
-
-    df = pd.read_csv(log_path, parse_dates=["timestamp"])
-    window = df[df["timestamp"] >= start]
-
-    return jsonify({
-        "period": period,
-        "from": start.isoformat(),
-        "to": now.isoformat(),
-        "total_requests": len(window),
-        "fallbacks": int(window["fallback"].sum()),
-        "errors": int(window["error"].sum())
-    })
-
-@app.route("/report", methods=["GET"])
-def get_report():
-    """
-    전체 누적 로그에서
-    - template별 요청(requests)
-    - fallback 건수(fallbacks) 및 비율(fallback_rate%)
-    - error 건수(errors) 및 비율(error_rate%)
-    요약하여 반환
-    """
-    log_path = os.path.join(DATA_DIR, "analytics_log.csv")
-    if not os.path.exists(log_path):
-        return jsonify(error="로그 파일을 찾을 수 없습니다."), 404
-
-    df = pd.read_csv(log_path)
-
-    grp = df.groupby("template").agg({
-        "timestamp": "count",
-        "fallback": "sum",
-        "error": "sum"
-    }).rename(columns={"timestamp": "requests"})
-
-    grp["fallback_rate"] = (grp["fallback"] / grp["requests"] * 100).round(1)
-    grp["error_rate"]    = (grp["error"]    / grp["requests"] * 100).round(1)
-
-    report = []
-    for tpl, row in grp.sort_values("requests", ascending=False).iterrows():
-        report.append({
-            "template": tpl,
-            "requests": int(row["requests"]),
-            "fallbacks": int(row["fallback"]),
-            "errors": int(row["error"]),
-            "fallback_rate%": row["fallback_rate"],
-            "error_rate%": row["error_rate"]
-        })
-
-    return jsonify(report=report)
-
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
-
