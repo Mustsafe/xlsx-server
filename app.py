@@ -388,5 +388,75 @@ def render_news():
     )
     return jsonify(formatted_news=resp.choices[0].message.content)
 
+@app.route("/stats", methods=["GET"])
+def get_stats():
+    """
+    ?period=daily 또는 weekly
+    daily  → 오늘 00:00:00 ~ 현재 시각 (UTC 기준)
+    weekly → 이번 주 월요일 00:00:00 ~ 현재 시각
+    """
+    period = request.args.get("period", "daily")
+    now = datetime.utcnow()
+
+    if period == "weekly":
+        start = now - timedelta(days=now.weekday())
+        start = start.replace(hour=0, minute=0, second=0, microsecond=0)
+    else:
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    log_path = os.path.join(DATA_DIR, "analytics_log.csv")
+    if not os.path.exists(log_path):
+        return jsonify(error="로그 파일을 찾을 수 없습니다."), 404
+
+    df = pd.read_csv(log_path, parse_dates=["timestamp"])
+    window = df[df["timestamp"] >= start]
+
+    return jsonify({
+        "period": period,
+        "from": start.isoformat(),
+        "to": now.isoformat(),
+        "total_requests": len(window),
+        "fallbacks": int(window["fallback"].sum()),
+        "errors": int(window["error"].sum())
+    })
+
+@app.route("/report", methods=["GET"])
+def get_report():
+    """
+    전체 누적 로그에서
+    - template별 요청(requests)
+    - fallback 건수(fallbacks) 및 비율(fallback_rate%)
+    - error 건수(errors) 및 비율(error_rate%)
+    요약하여 반환
+    """
+    log_path = os.path.join(DATA_DIR, "analytics_log.csv")
+    if not os.path.exists(log_path):
+        return jsonify(error="로그 파일을 찾을 수 없습니다."), 404
+
+    df = pd.read_csv(log_path)
+
+    grp = df.groupby("template").agg({
+        "timestamp": "count",
+        "fallback": "sum",
+        "error": "sum"
+    }).rename(columns={"timestamp": "requests"})
+
+    grp["fallback_rate"] = (grp["fallback"] / grp["requests"] * 100).round(1)
+    grp["error_rate"]    = (grp["error"]    / grp["requests"] * 100).round(1)
+
+    report = []
+    for tpl, row in grp.sort_values("requests", ascending=False).iterrows():
+        report.append({
+            "template": tpl,
+            "requests": int(row["requests"]),
+            "fallbacks": int(row["fallback"]),
+            "errors": int(row["error"]),
+            "fallback_rate%": row["fallback_rate"],
+            "error_rate%": row["error_rate"]
+        })
+
+    return jsonify(report=report)
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
